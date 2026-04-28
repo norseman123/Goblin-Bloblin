@@ -2,243 +2,247 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Slope-Slider Foundry</title>
+    <title>Goblin Descent: Overwhelmingly Positive Edition</title>
     <style>
         body {
-            background-color: #1e1e1e;
-            color: #e0e0e0;
-            font-family: monospace;
+            background-color: #111;
+            color: #eee;
+            font-family: 'Courier New', Courier, monospace;
             text-align: center;
             margin: 0;
             padding: 20px;
+            overflow: hidden;
         }
         canvas {
-            background-color: #2a2a2a;
-            border: 4px solid #555;
-            box-shadow: 0 0 15px rgba(0,0,0,0.8);
-            cursor: crosshair;
-            margin-top: 10px;
+            background-color: #1a1e24;
+            border: 2px solid #444;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
         }
-        #dashboard {
-            font-size: 18px;
-            margin-bottom: 10px;
+        #ui {
+            width: 600px;
+            margin: 0 auto 10px auto;
+            display: flex;
+            justify-content: space-between;
+            background: #222;
+            padding: 10px;
+            border: 1px solid #555;
+            border-radius: 5px;
         }
-        .stat { font-weight: bold; color: #ffcc00; }
-        .controls { margin-top: 10px; }
-        button {
-            background-color: #444;
-            color: white;
-            border: 2px solid #666;
-            padding: 8px 16px;
-            font-family: monospace;
-            font-size: 16px;
-            cursor: pointer;
-            margin: 0 5px;
-        }
-        button.active { background-color: #7a8b29; border-color: #a4b93d; }
-        button:hover { background-color: #555; }
+        .stat { color: #f2c029; font-weight: bold; }
+        .danger { color: #ff3333; font-weight: bold; animation: blink 1s infinite; }
+        @keyframes blink { 50% { opacity: 0.5; } }
+        #controls { margin-top: 10px; font-size: 14px; color: #aaa; }
+        kbd { background: #333; padding: 2px 6px; border-radius: 3px; border: 1px solid #666; color: #fff;}
     </style>
 </head>
 <body>
 
-    <h2>GOBLIN DESCENT</h2>
-    <div id="dashboard">
-        Depth: <span id="depthDisplay" class="stat">0</span>m | 
-        Fortitude: <span id="fortitudeDisplay" class="stat">100</span> | 
-        Scrap: <span id="scrapDisplay" class="stat">50</span>
+    <div id="ui">
+        <div>Depth: <span id="depth" class="stat">0</span>m</div>
+        <div>Tilt: <span id="tilt" class="stat">0</span>°</div>
+        <div>Scrap: <span id="scrap" class="stat">50</span></div>
     </div>
 
-    <div class="controls">
-        <button id="btn-armor" class="active" onclick="selectTool('armor')">Build Armor (10 Scrap)</button>
-        <button id="btn-drill" onclick="selectTool('drill')">Build Drill (25 Scrap)</button>
-    </div>
+    <canvas id="game" width="600" height="500"></canvas>
 
-    <canvas id="gameCanvas" width="400" height="600"></canvas>
+    <div id="controls">
+        Move: <kbd>A</kbd> <kbd>D</kbd> | 
+        Build: <kbd>1</kbd> Drill (Weight: Light) | 
+        <kbd>2</kbd> Armor (Weight: Med) | 
+        <kbd>3</kbd> Anvil (Weight: HEAVY)
+    </div>
 
     <script>
-        const canvas = document.getElementById('gameCanvas');
+        const canvas = document.getElementById('game');
         const ctx = canvas.getContext('2d');
 
         // Game State
-        let depth = 0;
-        let fortitude = 100;
-        let scrap = 50;
-        let gameOver = false;
-        let gameWon = false;
-        let frameCount = 0;
-        let currentTool = 'armor'; // 'armor' or 'drill'
+        let state = {
+            depth: 0, scrap: 50, gameOver: false, message: "",
+            tiltAngle: 0, // In radians
+            angularVelocity: 0
+        };
 
-        // Platform Grid (5 columns, 2 rows at the bottom)
-        const cols = 5;
-        const rows = 2;
-        const cellSize = 80;
-        const platformY = canvas.height - (rows * cellSize);
-        let platform = [];
+        // Platform Specs
+        const platform = { y: 400, width: 400, height: 20 };
 
-        for (let r = 0; r < rows; r++) {
-            platform[r] = [];
-            for (let c = 0; c < cols; c++) {
-                platform[r][c] = { type: 'empty', health: 0 };
-            }
-        }
+        // The Goblin Engineer
+        const goblin = { x: 0, width: 16, height: 24, speed: 3, weight: 15, vx: 0 };
 
-        // Obstacles (Falling Rocks)
-        let obstacles = [];
+        // Buildings & Hazards
+        let buildings = [];
+        let hazards = [];
 
-        // UI Updates
-        function updateUI() {
-            document.getElementById('depthDisplay').innerText = Math.floor(depth);
-            document.getElementById('fortitudeDisplay').innerText = fortitude;
-            document.getElementById('scrapDisplay').innerText = Math.floor(scrap);
-        }
+        // Building Blueprints [Cost, Weight, Width, Height, Color, Name]
+        const blueprints = {
+            '1': { cost: 15, weight: 10, w: 30, h: 40, color: '#4fa3d1', type: 'drill' },
+            '2': { cost: 20, weight: 25, w: 40, h: 30, color: '#7a8b29', type: 'armor' },
+            '3': { cost: 10, weight: 60, w: 20, h: 20, color: '#555', type: 'anvil' } // Cheap, heavy counterweight
+        };
 
-        // Tool Selection
-        window.selectTool = function(tool) {
-            currentTool = tool;
-            document.getElementById('btn-armor').classList.remove('active');
-            document.getElementById('btn-drill').classList.remove('active');
-            document.getElementById('btn-' + tool).classList.add('active');
-        }
-
-        // Mouse Click Handler for Building
-        canvas.addEventListener('mousedown', function(e) {
-            if (gameOver || gameWon) return;
-
-            const rect = canvas.getBoundingClientRect();
-            const mouseX = e.clientX - rect.left;
-            const mouseY = e.clientY - rect.top;
-
-            // Check if click is within platform area
-            if (mouseY > platformY) {
-                const c = Math.floor(mouseX / cellSize);
-                const r = Math.floor((mouseY - platformY) / cellSize);
-
-                if (platform[r][c].type === 'empty') {
-                    if (currentTool === 'armor' && scrap >= 10) {
-                        scrap -= 10;
-                        platform[r][c] = { type: 'armor', health: 3 };
-                    } else if (currentTool === 'drill' && scrap >= 25) {
-                        scrap -= 25;
-                        platform[r][c] = { type: 'drill', health: 1 };
+        // Input Handling
+        const keys = { a: false, d: false };
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'a' || e.key === 'A') keys.a = true;
+            if (e.key === 'd' || e.key === 'D') keys.d = true;
+            
+            // Building logic
+            if (['1', '2', '3'].includes(e.key) && !state.gameOver) {
+                let bp = blueprints[e.key];
+                if (state.scrap >= bp.cost) {
+                    // Check if overlapping another building
+                    let overlap = buildings.some(b => Math.abs(b.x - goblin.x) < (b.w/2 + bp.w/2));
+                    if (!overlap) {
+                        state.scrap -= bp.cost;
+                        buildings.push({ x: goblin.x, ...bp, hp: 3 });
                     }
-                    updateUI();
                 }
             }
         });
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'a' || e.key === 'A') keys.a = false;
+            if (e.key === 'd' || e.key === 'D') keys.d = false;
+        });
 
-        // Main Game Loop
-        function gameLoop() {
-            if (gameOver || gameWon) return;
+        // Game Loop
+        function update() {
+            if (state.gameOver) return;
+            state.depth += 0.02;
 
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            frameCount++;
+            // Movement
+            if (keys.a) goblin.x -= goblin.speed;
+            if (keys.d) goblin.x += goblin.speed;
+            
+            // Constrain goblin to platform
+            goblin.x = Math.max(-platform.width/2 + goblin.width/2, Math.min(platform.width/2 - goblin.width/2, goblin.x));
 
-            // 1. Update Game Stats
-            depth += 0.05; // Descend deeper
-            if (depth >= 1000) gameWon = true;
+            // Physics: Calculate Torque (Force x Distance from Center)
+            let totalTorque = goblin.x * goblin.weight; 
+            buildings.forEach(b => { totalTorque += b.x * b.weight; });
+            
+            // Adjust tilt based on torque
+            let targetTilt = totalTorque / 5000; // Physics dampener
+            state.tiltAngle += (targetTilt - state.tiltAngle) * 0.05; 
 
-            // 2. Process Drills (Generate Scrap)
-            if (frameCount % 60 === 0) { // Every ~1 second
-                for (let r = 0; r < rows; r++) {
-                    for (let c = 0; c < cols; c++) {
-                        if (platform[r][c].type === 'drill') {
-                            scrap += 2; // Drills make 2 scrap per second
-                        }
-                    }
-                }
-                updateUI();
+            // Lose condition: Tipped over!
+            let tiltDegrees = state.tiltAngle * (180/Math.PI);
+            if (Math.abs(tiltDegrees) > 35) {
+                state.gameOver = true;
+                state.message = "FATAL: PLATFORM TIPPED OVER!";
             }
 
-            // 3. Spawn Obstacles
-            if (Math.random() < 0.02 + (depth / 20000)) { // Gets harder as you go deeper
-                const randomCol = Math.floor(Math.random() * cols);
-                obstacles.push({
-                    x: randomCol * cellSize + (cellSize/2),
-                    y: -20,
-                    radius: 15,
-                    col: randomCol
+            // Economy: Drills generate scrap
+            if (Math.random() < 0.02) {
+                let drillCount = buildings.filter(b => b.type === 'drill').length;
+                state.scrap += drillCount * 2;
+            }
+
+            // Hazards falling
+            if (Math.random() < 0.01 + (state.depth / 10000)) {
+                hazards.push({
+                    x: (Math.random() - 0.5) * platform.width, // Spawn relative to platform center
+                    y: -50, radius: 10, speed: 2 + Math.random() * 2
                 });
             }
 
-            // 4. Update and Draw Obstacles
-            ctx.fillStyle = '#ff4444';
-            for (let i = obstacles.length - 1; i >= 0; i--) {
-                let obs = obstacles[i];
-                obs.y += 3 + (depth / 200); // Speed increases with depth
+            // Update hazards and collision
+            for (let i = hazards.length - 1; i >= 0; i--) {
+                let h = hazards[i];
+                h.y += h.speed;
 
-                // Collision with platform
-                if (obs.y > platformY) {
-                    const hitRow = obs.y > platformY + cellSize ? 1 : 0;
-                    const cell = platform[hitRow][obs.col];
-
-                    if (cell.type !== 'empty') {
-                        cell.health--;
-                        if (cell.health <= 0) cell.type = 'empty';
-                    } else {
-                        // Hits the bare platform, take damage
-                        fortitude -= 5;
-                        if (fortitude <= 0) {
-                            fortitude = 0;
-                            gameOver = true;
-                        }
+                // Simple collision line at platform Y
+                if (h.y > platform.y - 30) {
+                    // Did it hit a building?
+                    let hitIndex = buildings.findIndex(b => Math.abs(b.x - h.x) < b.w/2 + h.radius);
+                    if (hitIndex > -1) {
+                        buildings[hitIndex].hp--;
+                        if (buildings[hitIndex].hp <= 0) buildings.splice(hitIndex, 1);
+                        hazards.splice(i, 1);
+                        continue;
                     }
-                    obstacles.splice(i, 1);
-                    updateUI();
-                    continue;
-                }
-
-                // Draw Obstacle
-                ctx.beginPath();
-                ctx.arc(obs.x, obs.y, obs.radius, 0, Math.PI * 2);
-                ctx.fill();
-            }
-
-            // 5. Draw Platform Grid
-            for (let r = 0; r < rows; r++) {
-                for (let c = 0; c < cols; c++) {
-                    const x = c * cellSize;
-                    const y = platformY + (r * cellSize);
                     
-                    ctx.strokeStyle = '#444';
-                    ctx.strokeRect(x, y, cellSize, cellSize);
-
-                    const cell = platform[r][c];
-                    if (cell.type === 'armor') {
-                        ctx.fillStyle = '#7a8b29';
-                        ctx.fillRect(x + 5, y + 5, cellSize - 10, cellSize - 10);
-                        ctx.fillStyle = '#fff';
-                        ctx.fillText('HP:' + cell.health, x + 25, y + 45);
-                    } else if (cell.type === 'drill') {
-                        ctx.fillStyle = '#4da6ff';
-                        ctx.fillRect(x + 5, y + 5, cellSize - 10, cellSize - 10);
-                        ctx.fillStyle = '#fff';
-                        ctx.fillText('DRILL', x + 20, y + 45);
+                    // Did it hit bare platform?
+                    if (h.y > platform.y && Math.abs(h.x) < platform.width/2) {
+                        state.gameOver = true;
+                        state.message = "FATAL: HULL BREACHED BY ROCK!";
                     }
                 }
             }
 
-            // Draw End States
-            if (gameOver) {
-                ctx.fillStyle = 'rgba(255, 0, 0, 0.7)';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.fillStyle = 'white';
-                ctx.font = '30px monospace';
-                ctx.fillText('PLATFORM DESTROYED', 40, canvas.height / 2);
-            } else if (gameWon) {
-                ctx.fillStyle = 'rgba(0, 255, 0, 0.7)';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.fillStyle = 'white';
-                ctx.font = '30px monospace';
-                ctx.fillText('CRASH SURVIVED!', 60, canvas.height / 2);
-            }
-
-            requestAnimationFrame(gameLoop);
+            updateUI(tiltDegrees);
         }
 
-        // Start Game
-        updateUI();
-        gameLoop();
+        function updateUI(tiltDegrees) {
+            document.getElementById('depth').innerText = Math.floor(state.depth);
+            document.getElementById('scrap').innerText = Math.floor(state.scrap);
+            
+            let tiltEl = document.getElementById('tilt');
+            tiltEl.innerText = Math.abs(Math.floor(tiltDegrees));
+            if (Math.abs(tiltDegrees) > 25) tiltEl.className = 'danger';
+            else tiltEl.className = 'stat';
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw World Hazards (falling straight down)
+            ctx.fillStyle = '#ff4444';
+            hazards.forEach(h => {
+                ctx.beginPath();
+                // Offset hazard X by center of screen
+                ctx.arc(h.x + canvas.width/2, h.y, h.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Set up Platform Pivot Camera
+            ctx.save();
+            ctx.translate(canvas.width / 2, platform.y); // Move origin to center of platform
+            ctx.rotate(state.tiltAngle); // Rotate the whole platform context
+
+            // Draw Platform
+            ctx.fillStyle = '#666';
+            ctx.fillRect(-platform.width/2, 0, platform.width, platform.height);
+            // Draw center pivot marker
+            ctx.fillStyle = '#ffcc00';
+            ctx.beginPath(); ctx.arc(0, 10, 5, 0, Math.PI*2); ctx.fill();
+
+            // Draw Buildings
+            buildings.forEach(b => {
+                ctx.fillStyle = b.color;
+                ctx.fillRect(b.x - b.w/2, -b.h, b.w, b.h);
+                // Health bar
+                ctx.fillStyle = 'red'; ctx.fillRect(b.x - b.w/2, -b.h - 5, b.w, 3);
+                ctx.fillStyle = 'green'; ctx.fillRect(b.x - b.w/2, -b.h - 5, (b.w/3) * b.hp, 3);
+            });
+
+            // Draw Goblin
+            ctx.fillStyle = '#2ca83b'; // Goblin Green
+            ctx.fillRect(goblin.x - goblin.width/2, -goblin.height, goblin.width, goblin.height);
+            // Goblin eyes
+            ctx.fillStyle = 'white';
+            ctx.fillRect(goblin.x - 6, -goblin.height + 4, 4, 4);
+            ctx.fillRect(goblin.x + 2, -goblin.height + 4, 4, 4);
+
+            ctx.restore(); // Reset Camera
+
+            // Draw Game Over
+            if (state.gameOver) {
+                ctx.fillStyle = 'rgba(0,0,0,0.8)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.font = '24px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(state.message, canvas.width/2, canvas.height/2);
+            }
+        }
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        loop(); // Start
     </script>
 </body>
 </html>
