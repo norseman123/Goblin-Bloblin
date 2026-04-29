@@ -2,31 +2,22 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Goblin Descent: Overwhelmingly Positive Edition</title>
+    <title>Goblin Descent: 2.5D Automation</title>
     <style>
         body {
-            background-color: #111;
-            color: #eee;
+            background-color: #111; color: #eee;
             font-family: 'Courier New', Courier, monospace;
-            text-align: center;
-            margin: 0;
-            padding: 20px;
-            overflow: hidden;
+            text-align: center; margin: 0; padding: 20px; overflow: hidden;
+            user-select: none;
         }
         canvas {
-            background-color: #1a1e24;
-            border: 2px solid #444;
+            background-color: #1a1e24; border: 2px solid #444;
             box-shadow: 0 10px 30px rgba(0,0,0,0.8);
         }
         #ui {
-            width: 600px;
-            margin: 0 auto 10px auto;
-            display: flex;
-            justify-content: space-between;
-            background: #222;
-            padding: 10px;
-            border: 1px solid #555;
-            border-radius: 5px;
+            width: 800px; margin: 0 auto 10px auto; display: flex;
+            justify-content: space-between; background: #222; padding: 10px;
+            border: 1px solid #555; border-radius: 5px;
         }
         .stat { color: #f2c029; font-weight: bold; }
         .danger { color: #ff3333; font-weight: bold; animation: blink 1s infinite; }
@@ -40,16 +31,17 @@
     <div id="ui">
         <div>Depth: <span id="depth" class="stat">0</span>m</div>
         <div>Tilt: <span id="tilt" class="stat">0</span>°</div>
-        <div>Scrap: <span id="scrap" class="stat">50</span></div>
+        <div>Banked Scrap: <span id="scrap" class="stat">50</span></div>
     </div>
 
-    <canvas id="game" width="600" height="500"></canvas>
+    <canvas id="game" width="800" height="600"></canvas>
 
     <div id="controls">
-        Move: <kbd>A</kbd> <kbd>D</kbd> | 
-        Build: <kbd>1</kbd> Drill (Weight: Light) | 
-        <kbd>2</kbd> Armor (Weight: Med) | 
-        <kbd>3</kbd> Anvil (Weight: HEAVY)
+        Move: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> | 
+        Build: <kbd>1</kbd> Drill (15s) | 
+        <kbd>2</kbd> Flinger (20s) | 
+        <kbd>3</kbd> Sweeper (10s) | 
+        <kbd>4</kbd> Heavy Armor (25s)
     </div>
 
     <script>
@@ -59,190 +51,286 @@
         // Game State
         let state = {
             depth: 0, scrap: 50, gameOver: false, message: "",
-            tiltAngle: 0, // In radians
-            angularVelocity: 0
+            tiltAngle: 0, gracePeriod: 600
         };
 
-        // Platform Specs
-        const platform = { y: 400, width: 400, height: 20 };
+        // Platform Specs (2.5D: Width and Depth)
+        const platform = { y: 450, width: 500, depth: 200, thickness: 30 };
 
-        // The Goblin Engineer
-        const goblin = { x: 0, width: 16, height: 24, speed: 3, weight: 15, vx: 0 };
+        // The Goblin Engineer (x = left/right, z = front/back, y = altitude)
+        const goblin = { x: 0, z: 0, w: 20, h: 30, speed: 4, weight: 20 };
 
-        // Buildings & Hazards
+        // Entities arrays
         let buildings = [];
         let hazards = [];
+        let flyingScrap = [];
+        let looseScrap = [];
 
-        // Building Blueprints [Cost, Weight, Width, Height, Color, Name]
+        // Pre-build the Center Hopper (Cannot be destroyed, banks scrap)
+        buildings.push({ type: 'hopper', x: 0, z: -platform.depth/2 + 30, w: 60, h: 40, weight: 50, hp: 999, color: '#f2c029' });
+
+        // Blueprints
         const blueprints = {
-            '1': { cost: 15, weight: 10, w: 30, h: 40, color: '#4fa3d1', type: 'drill' },
-            '2': { cost: 20, weight: 25, w: 40, h: 30, color: '#7a8b29', type: 'armor' },
-            '3': { cost: 10, weight: 60, w: 20, h: 20, color: '#555', type: 'anvil' } // Cheap, heavy counterweight
+            '1': { cost: 15, weight: 15, w: 30, h: 40, color: '#4fa3d1', type: 'drill' },
+            '2': { cost: 20, weight: 20, w: 30, h: 30, color: '#9b59b6', type: 'flinger' },
+            '3': { cost: 10, weight: 25, w: 40, h: 20, color: '#e67e22', type: 'sweeper' },
+            '4': { cost: 25, weight: 80, w: 40, h: 40, color: '#7a8b29', type: 'armor' }
         };
 
-        // Input Handling
-        const keys = { a: false, d: false };
+        // Input
+        const keys = { w: false, a: false, s: false, d: false };
         window.addEventListener('keydown', (e) => {
-            if (e.key === 'a' || e.key === 'A') keys.a = true;
-            if (e.key === 'd' || e.key === 'D') keys.d = true;
+            let k = e.key.toLowerCase();
+            if (keys.hasOwnProperty(k)) keys[k] = true;
             
-            // Building logic
-            if (['1', '2', '3'].includes(e.key) && !state.gameOver) {
-                let bp = blueprints[e.key];
+            if (['1', '2', '3', '4'].includes(k) && !state.gameOver) {
+                let bp = blueprints[k];
                 if (state.scrap >= bp.cost) {
-                    // Check if overlapping another building
-                    let overlap = buildings.some(b => Math.abs(b.x - goblin.x) < (b.w/2 + bp.w/2));
+                    let overlap = buildings.some(b => Math.hypot(b.x - goblin.x, b.z - goblin.z) < (b.w/2 + bp.w/2));
                     if (!overlap) {
                         state.scrap -= bp.cost;
-                        buildings.push({ x: goblin.x, ...bp, hp: 3 });
+                        buildings.push({ x: goblin.x, z: goblin.z, ...bp, hp: 3, timer: 0 });
                     }
                 }
             }
         });
         window.addEventListener('keyup', (e) => {
-            if (e.key === 'a' || e.key === 'A') keys.a = false;
-            if (e.key === 'd' || e.key === 'D') keys.d = false;
+            let k = e.key.toLowerCase();
+            if (keys.hasOwnProperty(k)) keys[k] = false;
         });
 
-        // Game Loop
         function update() {
             if (state.gameOver) return;
             state.depth += 0.02;
 
-            // Movement
+            // 1. Goblin Movement (2.5D constraint)
+            if (keys.w) goblin.z -= goblin.speed;
+            if (keys.s) goblin.z += goblin.speed;
             if (keys.a) goblin.x -= goblin.speed;
             if (keys.d) goblin.x += goblin.speed;
             
-            // Constrain goblin to platform
-            goblin.x = Math.max(-platform.width/2 + goblin.width/2, Math.min(platform.width/2 - goblin.width/2, goblin.x));
+            goblin.x = Math.max(-platform.width/2 + goblin.w/2, Math.min(platform.width/2 - goblin.w/2, goblin.x));
+            goblin.z = Math.max(-platform.depth, Math.min(0, goblin.z));
 
-            // Physics: Calculate Torque (Force x Distance from Center)
+            // 2. Physics & Torque (Loose scrap adds weight!)
             let totalTorque = goblin.x * goblin.weight; 
             buildings.forEach(b => { totalTorque += b.x * b.weight; });
-            
-            // Adjust tilt based on torque
-            let targetTilt = totalTorque / 5000; // Physics dampener
+            looseScrap.forEach(s => { totalTorque += s.x * 5; }); // Scrap is heavy!
+
+            let targetTilt = totalTorque / 8000;
             state.tiltAngle += (targetTilt - state.tiltAngle) * 0.05; 
-
-            // Lose condition: Tipped over!
             let tiltDegrees = state.tiltAngle * (180/Math.PI);
+
             if (Math.abs(tiltDegrees) > 35) {
-                state.gameOver = true;
-                state.message = "FATAL: PLATFORM TIPPED OVER!";
+                state.gameOver = true; state.message = "FATAL: PLATFORM TIPPED OVER!";
             }
 
-            // Economy: Drills generate scrap
-            if (Math.random() < 0.02) {
-                let drillCount = buildings.filter(b => b.type === 'drill').length;
-                state.scrap += drillCount * 2;
-            }
-
-            // Hazards falling
-            if (Math.random() < 0.01 + (state.depth / 10000)) {
-                hazards.push({
-                    x: (Math.random() - 0.5) * platform.width, // Spawn relative to platform center
-                    y: -50, radius: 10, speed: 2 + Math.random() * 2
-                });
-            }
-
-            // Update hazards and collision
-            for (let i = hazards.length - 1; i >= 0; i--) {
-                let h = hazards[i];
-                h.y += h.speed;
-
-                // Simple collision line at platform Y
-                if (h.y > platform.y - 30) {
-                    // Did it hit a building?
-                    let hitIndex = buildings.findIndex(b => Math.abs(b.x - h.x) < b.w/2 + h.radius);
-                    if (hitIndex > -1) {
-                        buildings[hitIndex].hp--;
-                        if (buildings[hitIndex].hp <= 0) buildings.splice(hitIndex, 1);
-                        hazards.splice(i, 1);
-                        continue;
+            // 3. Automation Logic
+            buildings.forEach(b => {
+                if (b.type === 'drill') {
+                    b.timer++;
+                    if (b.timer > 120) { // Produce scrap every 2s
+                        b.timer = 0;
+                        looseScrap.push({ x: b.x, z: b.z + 10, y: 0, vx: 0, vz: 0 });
                     }
-                    
-                    // Did it hit bare platform?
-                    if (h.y > platform.y && Math.abs(h.x) < platform.width/2) {
-                        state.gameOver = true;
-                        state.message = "FATAL: HULL BREACHED BY ROCK!";
+                }
+                if (b.type === 'flinger') {
+                    b.timer++;
+                    if (b.timer > 60) { // Fling nearby loose scrap
+                        let ammoIndex = looseScrap.findIndex(s => Math.hypot(s.x - b.x, s.z - b.z) < 40);
+                        if (ammoIndex > -1) {
+                            let ammo = looseScrap.splice(ammoIndex, 1)[0];
+                            // Ballistic arc calculation
+                            let dirX = b.x > 0 ? -1 : 1; 
+                            let baseAngle = (Math.PI / 3) * dirX; 
+                            let trueAngle = baseAngle + state.tiltAngle; // TILT AFFECTS AIM!
+
+                            flyingScrap.push({
+                                x: b.x, z: b.z, y: b.h,
+                                vx: Math.sin(trueAngle) * 8,
+                                vy: Math.cos(trueAngle) * 12, // Upward force
+                                vz: -2 // Shoot towards the back (hopper)
+                            });
+                            b.timer = 0;
+                        }
                     }
+                }
+                if (b.type === 'sweeper') {
+                    // Sweeps loose scrap off the edge to save weight
+                    looseScrap.forEach(s => {
+                        if (Math.hypot(s.x - b.x, s.z - b.z) < 60) {
+                            s.vx = b.x > 0 ? 3 : -3; // Push towards nearest edge
+                        }
+                    });
+                }
+            });
+
+            // 4. Flying Scrap Physics
+            for (let i = flyingScrap.length - 1; i >= 0; i--) {
+                let s = flyingScrap[i];
+                s.x += s.vx; s.y += s.vy; s.z += s.vz;
+                s.vy -= 0.4; // Gravity pulls it back to platform (Y = 0)
+
+                if (s.y <= 0) {
+                    s.y = 0;
+                    // Check if it hit the Hopper
+                    let hopper = buildings[0];
+                    if (Math.abs(s.x - hopper.x) < hopper.w && Math.abs(s.z - hopper.z) < 40) {
+                        state.scrap += 5; // Banked!
+                    } else if (Math.abs(s.x) < platform.width/2 && s.z < 0 && s.z > -platform.depth) {
+                        // Missed! Becomes loose scrap
+                        looseScrap.push({ x: s.x, z: s.z, y: 0, vx: 0, vz: 0 });
+                    }
+                    flyingScrap.splice(i, 1);
                 }
             }
 
+            // 5. Loose Scrap Movement (Rolling)
+            for (let i = looseScrap.length - 1; i >= 0; i--) {
+                let s = looseScrap[i];
+                s.x += s.vx; s.z += s.vz;
+                // Friction
+                s.vx *= 0.9; s.vz *= 0.9;
+                // Roll based on platform tilt
+                s.vx += state.tiltAngle * 2; 
+
+                // Falls off edge
+                if (Math.abs(s.x) > platform.width/2) looseScrap.splice(i, 1);
+            }
+
+            // 6. Edge-Biased Hazards
+            if (state.gracePeriod > 0) state.gracePeriod--;
+            else if (Math.random() < 0.01 + (state.depth / 20000)) {
+                let roll = Math.random();
+                let spawnX = roll < 0.4 ? -platform.width/2 + 20 : (roll < 0.8 ? platform.width/2 - 20 : 0);
+                hazards.push({
+                    x: spawnX, y: 600, z: -Math.random() * platform.depth, 
+                    radius: 15, speed: 3 + (state.depth / 500)
+                });
+            }
+
+            // Hazard Collision
+            for (let i = hazards.length - 1; i >= 0; i--) {
+                let h = hazards[i]; h.y -= h.speed;
+                if (h.y <= 0) {
+                    let hitBuilding = buildings.findIndex(b => b.type !== 'hopper' && Math.hypot(b.x - h.x, b.z - h.z) < b.w/2 + h.radius);
+                    if (hitBuilding > -1) {
+                        buildings[hitBuilding].hp--;
+                        if (buildings[hitBuilding].hp <= 0) buildings.splice(hitBuilding, 1);
+                    } else if (Math.abs(h.x) < platform.width/2) {
+                        state.gameOver = true; state.message = "FATAL: HULL BREACHED!";
+                    }
+                    hazards.splice(i, 1);
+                }
+            }
             updateUI(tiltDegrees);
         }
 
         function updateUI(tiltDegrees) {
             document.getElementById('depth').innerText = Math.floor(state.depth);
             document.getElementById('scrap').innerText = Math.floor(state.scrap);
-            
             let tiltEl = document.getElementById('tilt');
             tiltEl.innerText = Math.abs(Math.floor(tiltDegrees));
-            if (Math.abs(tiltDegrees) > 25) tiltEl.className = 'danger';
-            else tiltEl.className = 'stat';
+            tiltEl.className = Math.abs(tiltDegrees) > 25 ? 'danger' : 'stat';
         }
 
         function draw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // Draw World Hazards (falling straight down)
-            ctx.fillStyle = '#ff4444';
-            hazards.forEach(h => {
-                ctx.beginPath();
-                // Offset hazard X by center of screen
-                ctx.arc(h.x + canvas.width/2, h.y, h.radius, 0, Math.PI * 2);
-                ctx.fill();
-            });
-
-            // Set up Platform Pivot Camera
             ctx.save();
-            ctx.translate(canvas.width / 2, platform.y); // Move origin to center of platform
-            ctx.rotate(state.tiltAngle); // Rotate the whole platform context
+            ctx.translate(canvas.width / 2, platform.y);
+            ctx.rotate(state.tiltAngle);
 
-            // Draw Platform
-            ctx.fillStyle = '#666';
-            ctx.fillRect(-platform.width/2, 0, platform.width, platform.height);
-            // Draw center pivot marker
-            ctx.fillStyle = '#ffcc00';
-            ctx.beginPath(); ctx.arc(0, 10, 5, 0, Math.PI*2); ctx.fill();
+            // Draw Platform (2.5D Thick Slab)
+            ctx.fillStyle = '#7a7d80'; // Top face
+            ctx.fillRect(-platform.width/2, -platform.depth, platform.width, platform.depth);
+            ctx.fillStyle = '#4a4c4f'; // Front face (thickness)
+            ctx.fillRect(-platform.width/2, 0, platform.width, platform.thickness);
+            ctx.fillStyle = '#ffcc00'; // Pivot marker
+            ctx.fillRect(-5, 0, 10, platform.thickness);
 
-            // Draw Buildings
+            // Z-Sorting: Collect everything to draw and sort by Z (Depth)
+            let drawables = [];
+            
+            // Add Buildings
             buildings.forEach(b => {
-                ctx.fillStyle = b.color;
-                ctx.fillRect(b.x - b.w/2, -b.h, b.w, b.h);
-                // Health bar
-                ctx.fillStyle = 'red'; ctx.fillRect(b.x - b.w/2, -b.h - 5, b.w, 3);
-                ctx.fillStyle = 'green'; ctx.fillRect(b.x - b.w/2, -b.h - 5, (b.w/3) * b.hp, 3);
+                drawables.push({ z: b.z, draw: () => {
+                    ctx.fillStyle = b.color;
+                    // Draw 2.5D box (front face and top face)
+                    ctx.fillRect(b.x - b.w/2, b.z - b.h, b.w, b.h); 
+                    ctx.fillStyle = 'rgba(0,0,0,0.3)'; // Fake top shading
+                    ctx.beginPath(); ctx.moveTo(b.x - b.w/2, b.z - b.h);
+                    ctx.lineTo(b.x - b.w/2 + 10, b.z - b.h - 10);
+                    ctx.lineTo(b.x + b.w/2 + 10, b.z - b.h - 10);
+                    ctx.lineTo(b.x + b.w/2, b.z - b.h); ctx.fill();
+                    
+                    if (b.type === 'hopper') {
+                        ctx.fillStyle = 'black'; ctx.fillRect(b.x - 15, b.z - b.h + 5, 30, 20);
+                        ctx.fillStyle = 'white'; ctx.fillText('BANK', b.x - 12, b.z - b.h + 20);
+                    } else {
+                        // Health bar
+                        ctx.fillStyle = 'red'; ctx.fillRect(b.x - b.w/2, b.z - b.h - 15, b.w, 4);
+                        ctx.fillStyle = 'green'; ctx.fillRect(b.x - b.w/2, b.z - b.h - 15, (b.w/3) * b.hp, 4);
+                    }
+                }});
             });
 
-            // Draw Goblin
-            ctx.fillStyle = '#2ca83b'; // Goblin Green
-            ctx.fillRect(goblin.x - goblin.width/2, -goblin.height, goblin.width, goblin.height);
-            // Goblin eyes
-            ctx.fillStyle = 'white';
-            ctx.fillRect(goblin.x - 6, -goblin.height + 4, 4, 4);
-            ctx.fillRect(goblin.x + 2, -goblin.height + 4, 4, 4);
+            // Add Loose Scrap
+            looseScrap.forEach(s => {
+                drawables.push({ z: s.z, draw: () => {
+                    ctx.fillStyle = '#silver'; ctx.beginPath();
+                    ctx.arc(s.x, s.z, 5, 0, Math.PI*2); ctx.fill();
+                }});
+            });
 
-            ctx.restore(); // Reset Camera
+            // Add Goblin
+            drawables.push({ z: goblin.z, draw: () => {
+                ctx.fillStyle = '#2ca83b'; 
+                ctx.fillRect(goblin.x - goblin.w/2, goblin.z - goblin.h, goblin.w, goblin.h);
+                ctx.fillStyle = 'white'; // Eyes
+                ctx.fillRect(goblin.x - 6, goblin.z - goblin.h + 5, 4, 4);
+                ctx.fillRect(goblin.x + 2, goblin.z - goblin.h + 5, 4, 4);
+            }});
 
-            // Draw Game Over
+            // Add Hazards (Falling rocks)
+            hazards.forEach(h => {
+                drawables.push({ z: h.z, draw: () => {
+                    ctx.fillStyle = '#ff4444'; ctx.beginPath();
+                    // h.y is altitude above platform
+                    ctx.arc(h.x, h.z - h.y, h.radius, 0, Math.PI*2); ctx.fill();
+                    // Drop shadow
+                    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.beginPath();
+                    ctx.ellipse(h.x, h.z, h.radius, h.radius/2, 0, 0, Math.PI*2); ctx.fill();
+                }});
+            });
+
+            // Add Flying Scrap
+            flyingScrap.forEach(s => {
+                drawables.push({ z: s.z, draw: () => {
+                    ctx.fillStyle = 'white'; ctx.beginPath();
+                    ctx.arc(s.x, s.z - s.y, 4, 0, Math.PI*2); ctx.fill();
+                    // Shadow
+                    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath();
+                    ctx.arc(s.x, s.z, 4, 0, Math.PI*2); ctx.fill();
+                }});
+            });
+
+            // Execute Drawing back-to-front
+            drawables.sort((a, b) => a.z - b.z).forEach(item => item.draw());
+
+            ctx.restore();
+
             if (state.gameOver) {
-                ctx.fillStyle = 'rgba(0,0,0,0.8)';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.fillStyle = 'white';
-                ctx.font = '24px monospace';
-                ctx.textAlign = 'center';
+                ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white'; ctx.font = '24px monospace'; ctx.textAlign = 'center';
                 ctx.fillText(state.message, canvas.width/2, canvas.height/2);
+            } else if (state.gracePeriod > 0) {
+                ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.font = '16px monospace'; ctx.textAlign = 'center';
+                ctx.fillText(`GRACE PERIOD: ${Math.ceil(state.gracePeriod/60)}s`, canvas.width/2, 50);
             }
         }
 
-        function loop() {
-            update();
-            draw();
-            requestAnimationFrame(loop);
-        }
-
-        loop(); // Start
+        function loop() { update(); draw(); requestAnimationFrame(loop); }
+        loop();
     </script>
 </body>
 </html>
