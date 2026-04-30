@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Goblin Factory Prototype</title>
+    <title>Goblin Factory - Blueprints & Logic</title>
     <style>
         body { 
             margin: 0; 
@@ -13,23 +13,47 @@
             align-items: center; 
             height: 100vh; 
             color: white; 
-            font-family: sans-serif; 
+            font-family: monospace; 
             flex-direction: column;
         }
+        #game-container {
+            position: relative;
+        }
         canvas { 
-            background-color: #87CEEB; /* Sky blue background */
+            background-color: #87CEEB; 
             border: 4px solid #444; 
             box-shadow: 0px 0px 20px rgba(0,0,0,0.5);
+            display: block;
         }
-        #instructions { 
-            margin-bottom: 15px; 
-            font-size: 18px;
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #555;
         }
+        .ui-text { margin: 5px 0; font-size: 16px; }
+        #instructions { margin-bottom: 10px; font-size: 14px; text-align: center; color: #aaa;}
     </style>
 </head>
 <body>
-    <div id="instructions">WASD or Arrows to Move | SPACE or Click to Place Furnace</div>
-    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="instructions">
+        WASD/Arrows: Move | Mouse: Aim Blueprint | Click/Space: Build<br>
+        1: Auto-Miner | 2: Furnace | 3: Heavy Plating
+    </div>
+    
+    <div id="game-container">
+        <div id="ui-layer">
+            <div class="ui-text" id="ui-scrap">Scrap: 50</div>
+            <div class="ui-text" id="ui-power">Power: 0 / 0</div>
+            <div class="ui-text" id="ui-selected">Selected: Auto-Miner</div>
+        </div>
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+    </div>
 
     <script>
         const canvas = document.getElementById('gameCanvas');
@@ -37,84 +61,146 @@
 
         // --- Game Settings ---
         const TILE_SIZE = 64;
-        const SPEED = 250; // Goblin speed in pixels per second
+        const SPEED = 250; 
+        const BUILD_RANGE = 2; // How many tiles away the goblin can reach
 
         let lastTime = 0;
         const keys = {};
-        const gridData = {}; // Stores buildings as "x,y": "furnace"
+        
+        // --- Economy & Map ---
+        let scrap = 50;
+        let powerGenerated = 0;
+        let powerConsumed = 0;
+        const gridData = {}; // Stores objects now, not just strings
+
+        // --- Blueprint / Mouse Tracking ---
+        let mouseGridX = 0;
+        let mouseGridY = 0;
+        let selectedBuilding = 'miner';
 
         // --- The Goblin ---
         const player = {
-            x: 400,
-            y: 300,
-            width: 32,
-            height: 32,
-            color: '#32CD32' // Goblin Green
+            x: 400, y: 300, width: 32, height: 32, color: '#32CD32'
         };
 
-        // --- Input Handling ---
-        window.addEventListener('keydown', e => keys[e.code] = true);
+        // --- Building Definitions ---
+        const BUILDING_TYPES = {
+            'miner': {
+                name: 'Auto-Miner', cost: 20, color: '#4682B4', 
+                powerCost: 1, powerGen: 0,
+                logic: function(bData, dt) {
+                    // Logic: Generate 1 scrap every 1 second IF there is enough power
+                    if (powerGenerated >= powerConsumed) {
+                        bData.timer += dt;
+                        if (bData.timer >= 1.0) {
+                            scrap += 1;
+                            bData.timer = 0;
+                        }
+                    }
+                }
+            },
+            'furnace': {
+                name: 'Furnace', cost: 10, color: '#8B0000', 
+                powerCost: 0, powerGen: 5,
+                logic: function(bData, dt) { /* Passive, handled in power calculation */ }
+            },
+            'plating': {
+                name: 'Heavy Plating', cost: 30, color: '#2F4F4F', 
+                powerCost: 0, powerGen: 0,
+                logic: function(bData, dt) { /* Just a heavy block */ }
+            }
+        };
+
+        // --- Inputs ---
+        window.addEventListener('keydown', e => {
+            keys[e.code] = true;
+            // Hotkeys for building selection
+            if (e.code === 'Digit1') selectedBuilding = 'miner';
+            if (e.code === 'Digit2') selectedBuilding = 'furnace';
+            if (e.code === 'Digit3') selectedBuilding = 'plating';
+            
+            if (e.code === 'Space') attemptBuild();
+        });
         window.addEventListener('keyup', e => keys[e.code] = false);
 
-        // Click to build
-        canvas.addEventListener('mousedown', (e) => {
+        canvas.addEventListener('mousemove', (e) => {
             const rect = canvas.getBoundingClientRect();
-            const mouseX = e.clientX - rect.left;
-            const mouseY = e.clientY - rect.top;
-            placeBuilding(mouseX, mouseY);
+            mouseGridX = Math.floor((e.clientX - rect.left) / TILE_SIZE);
+            mouseGridY = Math.floor((e.clientY - rect.top) / TILE_SIZE);
         });
 
-        // Spacebar to build
-        window.addEventListener('keydown', (e) => {
-            if (e.code === 'Space') {
-                // Place it at the center of the goblin
-                placeBuilding(player.x + player.width/2, player.y + player.height/2);
-            }
-        });
+        canvas.addEventListener('mousedown', (e) => { attemptBuild(); });
 
         // --- Core Logic ---
-        function placeBuilding(x, y) {
-            // Calculate grid coordinates
-            const gridX = Math.floor(x / TILE_SIZE);
-            const gridY = Math.floor(y / TILE_SIZE);
-            const key = `${gridX},${gridY}`;
+        function attemptBuild() {
+            const key = `${mouseGridX},${mouseGridY}`;
+            const bDef = BUILDING_TYPES[selectedBuilding];
 
-            // Only place if the spot is empty
-            if (!gridData[key]) {
-                gridData[key] = 'furnace';
-                console.log(`Placed furnace at ${gridX}, ${gridY}`);
+            // 1. Check if spot is occupied
+            if (gridData[key]) return;
+
+            // 2. Check distance
+            const playerGridX = Math.floor((player.x + player.width/2) / TILE_SIZE);
+            const playerGridY = Math.floor((player.y + player.height/2) / TILE_SIZE);
+            const distance = Math.abs(mouseGridX - playerGridX) + Math.abs(mouseGridY - playerGridY);
+            if (distance > BUILD_RANGE) return;
+
+            // 3. Check cost
+            if (scrap >= bDef.cost) {
+                scrap -= bDef.cost;
+                gridData[key] = {
+                    type: selectedBuilding,
+                    timer: 0 // Used by machines that need delays
+                };
+                recalculatePower();
+            }
+        }
+
+        function recalculatePower() {
+            powerGenerated = 0;
+            powerConsumed = 0;
+            for (const key in gridData) {
+                const bType = gridData[key].type;
+                powerGenerated += BUILDING_TYPES[bType].powerGen;
+                powerConsumed += BUILDING_TYPES[bType].powerCost;
             }
         }
 
         function update(dt) {
-            let dx = 0;
-            let dy = 0;
-
+            // Player Movement
+            let dx = 0; let dy = 0;
             if (keys['KeyW'] || keys['ArrowUp']) dy -= 1;
             if (keys['KeyS'] || keys['ArrowDown']) dy += 1;
             if (keys['KeyA'] || keys['ArrowLeft']) dx -= 1;
             if (keys['KeyD'] || keys['ArrowRight']) dx += 1;
 
-            // Normalize diagonal movement so you don't move faster diagonally
             if (dx !== 0 && dy !== 0) {
                 const length = Math.sqrt(dx * dx + dy * dy);
-                dx /= length;
-                dy /= length;
+                dx /= length; dy /= length;
             }
 
             player.x += dx * SPEED * dt;
             player.y += dy * SPEED * dt;
-
-            // Keep goblin inside the canvas boundaries
             player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
             player.y = Math.max(0, Math.min(canvas.height - player.height, player.y));
+
+            // Factory Logic Update Loop
+            for (const key in gridData) {
+                const bData = gridData[key];
+                const bDef = BUILDING_TYPES[bData.type];
+                bDef.logic(bData, dt); // Run the specific machine logic
+            }
+
+            // Update UI text
+            document.getElementById('ui-scrap').innerText = `Scrap: ${Math.floor(scrap)}`;
+            document.getElementById('ui-power').innerText = `Power: ${powerConsumed} / ${powerGenerated}`;
+            document.getElementById('ui-selected').innerText = `Selected: ${BUILDING_TYPES[selectedBuilding].name} (Cost: ${BUILDING_TYPES[selectedBuilding].cost})`;
         }
 
         function draw() {
-            // Clear the screen every frame
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 1. Draw a faint grid to help visualize snapping
+            // 1. Draw Grid
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
             for (let x = 0; x < canvas.width; x += TILE_SIZE) {
                 ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
@@ -123,20 +209,35 @@
                 ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
             }
 
-            // 2. Draw Buildings
+            // 2. Draw Placed Buildings
             for (const key in gridData) {
                 const [gridX, gridY] = key.split(',').map(Number);
+                const bData = gridData[key];
                 
-                // Draw a dark red block for the furnace
-                ctx.fillStyle = '#8B0000'; 
-                ctx.fillRect(gridX * TILE_SIZE, gridY * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                ctx.fillStyle = BUILDING_TYPES[bData.type].color; 
+                ctx.fillRect(gridX * TILE_SIZE + 2, gridY * TILE_SIZE + 2, TILE_SIZE - 4, TILE_SIZE - 4);
                 
-                // Draw a little orange "fire" square inside the furnace
-                ctx.fillStyle = '#FFA500'; 
-                ctx.fillRect(gridX * TILE_SIZE + 16, gridY * TILE_SIZE + 32, 32, 16);
+                // Add a visual indicator if a machine is lacking power
+                if (BUILDING_TYPES[bData.type].powerCost > 0 && powerGenerated < powerConsumed) {
+                    ctx.fillStyle = 'red';
+                    ctx.fillRect(gridX * TILE_SIZE + 24, gridY * TILE_SIZE + 24, 16, 16);
+                }
             }
 
-            // 3. Draw the Goblin
+            // 3. Draw Blueprint Ghost
+            const playerGridX = Math.floor((player.x + player.width/2) / TILE_SIZE);
+            const playerGridY = Math.floor((player.y + player.height/2) / TILE_SIZE);
+            const distance = Math.abs(mouseGridX - playerGridX) + Math.abs(mouseGridY - playerGridY);
+            
+            const bDef = BUILDING_TYPES[selectedBuilding];
+            
+            // Check if valid placement (within range, empty spot, afford cost)
+            const isValid = (distance <= BUILD_RANGE) && (!gridData[`${mouseGridX},${mouseGridY}`]) && (scrap >= bDef.cost);
+
+            ctx.fillStyle = isValid ? 'rgba(0, 255, 0, 0.4)' : 'rgba(255, 0, 0, 0.4)';
+            ctx.fillRect(mouseGridX * TILE_SIZE, mouseGridY * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+
+            // 4. Draw Goblin
             ctx.fillStyle = player.color;
             ctx.fillRect(player.x, player.y, player.width, player.height);
         }
@@ -144,16 +245,15 @@
         // --- Game Loop ---
         function gameLoop(timestamp) {
             if (!lastTime) lastTime = timestamp;
-            const dt = (timestamp - lastTime) / 1000; // Convert to seconds
+            const dt = (timestamp - lastTime) / 1000;
             lastTime = timestamp;
 
             update(dt);
             draw();
 
-            requestAnimationFrame(gameLoop); // Call the loop again
+            requestAnimationFrame(gameLoop);
         }
 
-        // Start the game
         requestAnimationFrame(gameLoop);
     </script>
 </body>
