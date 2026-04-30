@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Goblin Factory - Production Chains</title>
+    <title>Goblin Factory - Automated Wood</title>
     <style>
         body { 
             margin: 0; background-color: #0b1320; display: flex; 
@@ -19,22 +19,18 @@
             display: block; width: 100%; height: 100%;
         }
         
-        /* UI Styling */
         .panel {
             position: absolute; background: rgba(0, 0, 0, 0.85);
-            padding: 15px; border-radius: 5px; border: 1px solid #777;
-            pointer-events: none;
+            padding: 15px; border-radius: 5px; border: 1px solid #777; pointer-events: none;
         }
         #ui-left { top: 10px; left: 10px; }
         #ui-right { top: 10px; right: 10px; width: 220px; }
         #ui-bottom { bottom: 10px; left: 50%; transform: translateX(-50%); text-align: center; }
 
         .res { font-size: 16px; font-weight: bold; margin: 4px 0; }
-        .req { color: #aaa; font-size: 12px; margin-left: 10px; }
         .obj-title { color: #FFD700; font-weight: bold; font-size: 18px; margin-bottom: 5px; border-bottom: 1px solid #555; padding-bottom: 5px; }
         .obj-task { color: #ddd; font-size: 14px; margin: 5px 0; }
         .obj-done { text-decoration: line-through; color: #555; }
-        
         kbd { background: #333; border: 1px solid #666; border-radius: 3px; padding: 2px 5px; font-size: 14px; color: white; }
     </style>
 </head>
@@ -42,7 +38,8 @@
 
     <div id="game-container">
         <div id="ui-left" class="panel">
-            <div class="res" id="res-wood" style="color: #DEB887;">Wood: 30</div>
+            <div class="obj-title">Core Inventory</div>
+            <div class="res" id="res-wood" style="color: #DEB887;">Wood: 40</div>
             <div class="res" id="res-scrap" style="color: #909090;">Raw Scrap: 0</div>
             <div class="res" id="res-plates" style="color: #4F6F6F;">Iron Plates: 0</div>
             <div class="res" id="res-power" style="color: #00FFFF;">Power: 0 / 0</div>
@@ -58,10 +55,11 @@
         <div id="ui-bottom" class="panel">
             <div class="res" id="ui-selected" style="color: #fff; margin-bottom: 10px;">Selected: Pearl Wood Floor</div>
             <kbd>1</kbd> Floor (2 Wd) &nbsp; 
-            <kbd>2</kbd> Wind Net (10 Wd) &nbsp; 
+            <kbd>2</kbd> Net (10 Wd) &nbsp; 
             <kbd>3</kbd> Turbine (10 Wd, 5 Scr) &nbsp; 
-            <kbd>4</kbd> Furnace (15 Scr) &nbsp; 
-            <kbd>5</kbd> Extractor (20 Plt)
+            <kbd>4</kbd> Furnace (15 Scr)<br><br>
+            <kbd>5</kbd> Extractor (20 Plt) &nbsp;
+            <kbd>6</kbd> Arbor (10 Wd, 10 Scr)
         </div>
 
         <canvas id="gameCanvas" width="1000" height="700"></canvas>
@@ -71,27 +69,33 @@
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
 
-        const TILE_W = 64;  
-        const TILE_H = 32;  
+        const TILE_W = 64, TILE_H = 32;  
         const SPEED = 4;    
+        let lastTime = 0; const keys = {};
 
-        let lastTime = 0;
-        const keys = {};
-
-        // --- Economy State ---
+        // Economy
         const inventory = { wood: 40, scrap: 0, plates: 0, tokens: 0 };
         let powerGen = 0, powerUse = 0;
         const gridData = {}; 
-
-        // --- Visual Feedback ---
-        const floatingTexts = []; // Array of {x, y, text, color, life, maxLife}
+        const floatingTexts = []; 
 
         let mouseGridX = 0, mouseGridY = 0;
         let selectedBuilding = 'floor_wood';
         let tutorialStep = 0;
 
+        // Player & Environment
         const player = { x: 0, y: 0, colorTop: '#32CD32', colorLeft: '#228B22', colorRight: '#006400' };
         const debrisParticles = Array.from({length: 40}, () => spawnDebris());
+
+        // Goboblin Helpers
+        const goboblins = [
+            { x: 0, y: 0, state: 'idle', targetX: 0, targetY: 0, item: null, color: '#FFD700' },
+            { x: 0, y: 0, state: 'idle', targetX: 0, targetY: 0, item: null, color: '#FFA500' },
+            { x: 0, y: 0, state: 'idle', targetX: 0, targetY: 0, item: null, color: '#FF8C00' },
+            { x: 0, y: 0, state: 'idle', targetX: 0, targetY: 0, item: null, color: '#DAA520' } // Added an extra helper!
+        ];
+
+        const resColors = { scrap: '#909090', plates: '#4F6F6F', wood: '#DEB887' };
 
         function spawnDebris() {
             return {
@@ -100,29 +104,18 @@
             };
         }
 
-        // --- Building Database (Now with logistical requirements) ---
         const BUILDINGS = {
             'core': { name: 'Core Stone', top: '#8A2BE2', left: '#4B0082', right: '#483D8B', isFloor: true, height: 16 },
-            
-            'floor_wood': { name: 'Pearl Wood Floor', top: '#DEB887', left: '#A0522D', right: '#8B4513', isFloor: true, height: 8, 
-                costs: { wood: 2 }, pCost: 0, pGen: 0 },
-            
-            'net': { name: 'Wind Net', top: '#aaa', left: '#777', right: '#555', isFloor: false, height: 24, 
-                costs: { wood: 10 }, pCost: 0, pGen: 0 },
-            
-            'turbine': { name: 'Wind Turbine', top: '#5CA2D4', left: '#4682B4', right: '#27408B', isFloor: false, height: 40, 
-                costs: { wood: 10, scrap: 5 }, pCost: 0, pGen: 3 },
-            
-            'furnace': { name: 'Furnace', top: '#B22222', left: '#8B0000', right: '#660000', isFloor: false, height: 32, 
-                costs: { scrap: 15 }, pCost: 1, pGen: 0 },
-            
-            'extractor': { name: 'Token Extractor', top: '#FFB6C1', left: '#FF69B4', right: '#C71585', isFloor: false, height: 48, 
-                costs: { plates: 20 }, pCost: 2, pGen: 0 }
+            'floor_wood': { name: 'Pearl Wood Floor', top: '#DEB887', left: '#A0522D', right: '#8B4513', isFloor: true, height: 8, costs: { wood: 2 }, pCost: 0, pGen: 0 },
+            'net': { name: 'Wind Net', top: '#aaa', left: '#777', right: '#555', isFloor: false, height: 24, costs: { wood: 10 }, pCost: 0, pGen: 0 },
+            'turbine': { name: 'Wind Turbine', top: '#5CA2D4', left: '#4682B4', right: '#27408B', isFloor: false, height: 40, costs: { wood: 10, scrap: 5 }, pCost: 0, pGen: 3 },
+            'furnace': { name: 'Furnace', top: '#B22222', left: '#8B0000', right: '#660000', isFloor: false, height: 32, costs: { scrap: 15 }, pCost: 1, pGen: 0 },
+            'extractor': { name: 'Token Extractor', top: '#FFB6C1', left: '#FF69B4', right: '#C71585', isFloor: false, height: 48, costs: { plates: 20 }, pCost: 2, pGen: 0 },
+            'arbor': { name: 'Sky Arbor', top: '#228B22', left: '#006400', right: '#004d00', isFloor: false, height: 24, costs: { wood: 10, scrap: 10 }, pCost: 1, pGen: 0 } // NEW
         };
 
-        gridData["0,0"] = { type: 'core', timer: 0, floorType: 'core' }; 
+        gridData["0,0"] = { type: 'core', timer: 0, floorType: 'core', local: {} }; 
 
-        // --- Input Handling ---
         window.addEventListener('keydown', e => {
             keys[e.code] = true;
             if (e.code === 'Digit1') selectedBuilding = 'floor_wood';
@@ -130,6 +123,7 @@
             if (e.code === 'Digit3') selectedBuilding = 'turbine';
             if (e.code === 'Digit4') selectedBuilding = 'furnace';
             if (e.code === 'Digit5') selectedBuilding = 'extractor';
+            if (e.code === 'Digit6') selectedBuilding = 'arbor'; // NEW
             if (e.code === 'Space') attemptBuild();
         });
         window.addEventListener('keyup', e => keys[e.code] = false);
@@ -164,7 +158,6 @@
             const key = `${mouseGridX},${mouseGridY}`;
             const bDef = BUILDINGS[selectedBuilding];
             const dist = Math.abs(mouseGridX - Math.round(player.x)) + Math.abs(mouseGridY - Math.round(player.y));
-            
             if (dist > 4) return; 
 
             if (bDef.isFloor) {
@@ -186,7 +179,8 @@
                     payCosts(bDef.costs);
                     gridData[key].machineType = selectedBuilding;
                     gridData[key].timer = 0; 
-                    gridData[key].status = 'ok'; // For alerts
+                    gridData[key].local = { scrap: 0, plates: 0, wood: 0 }; 
+                    gridData[key].status = 'ok'; 
                     recalculatePower();
                 }
             }
@@ -203,9 +197,7 @@
         }
 
         function updateTutorial() {
-            let html = "";
-            let tasks = [];
-
+            let html = ""; let tasks = [];
             if (tutorialStep === 0) {
                 tasks = [
                     { done: inventory.wood < 40 || Object.keys(gridData).length > 1, text: "Expand the platform (Press 1)" },
@@ -214,44 +206,37 @@
                 if (tasks.every(t => t.done)) tutorialStep = 1;
             } else if (tutorialStep === 1) {
                 tasks = [
-                    { done: inventory.scrap >= 5, text: "Wait for 5 Raw Scrap" },
-                    { done: Object.values(gridData).some(g => g.machineType === 'turbine'), text: "Build a Turbine for power (Press 3)" }
+                    { done: inventory.scrap >= 5, text: "Let goboblins haul 5 Scrap" },
+                    { done: Object.values(gridData).some(g => g.machineType === 'turbine'), text: "Build a Turbine (Press 3)" }
                 ];
                 if (tasks.every(t => t.done)) tutorialStep = 2;
             } else if (tutorialStep === 2) {
                 tasks = [
-                    { done: Object.values(gridData).some(g => g.machineType === 'furnace'), text: "Build a Furnace (Press 4)" },
-                    { done: inventory.plates >= 1, text: "Smelt your first Iron Plate" }
+                    { done: Object.values(gridData).some(g => g.machineType === 'arbor'), text: "Build a Sky Arbor to automate Wood! (Press 6)" }
                 ];
                 if (tasks.every(t => t.done)) tutorialStep = 3;
             } else {
-                tasks = [ { done: inventory.tokens > 0, text: "Build an Extractor and get a Token!" } ];
+                tasks = [ { done: inventory.tokens > 0, text: "Smelt plates, build an Extractor, and win!" } ];
             }
-
-            tasks.forEach(t => {
-                html += `<div class="obj-task ${t.done ? 'obj-done' : ''}">- ${t.text}</div>`;
-            });
+            tasks.forEach(t => { html += `<div class="obj-task ${t.done ? 'obj-done' : ''}">- ${t.text}</div>`; });
             document.getElementById('objective-list').innerHTML = html;
         }
 
         function update(dt) {
-            // Player Movement
             let dx = 0, dy = 0;
             if (keys['KeyW'] || keys['ArrowUp']) { dx -= 1; dy -= 1; }
             if (keys['KeyS'] || keys['ArrowDown']) { dx += 1; dy += 1; }
             if (keys['KeyA'] || keys['ArrowLeft']) { dx -= 1; dy += 1; }
             if (keys['KeyD'] || keys['ArrowRight']) { dx += 1; dy -= 1; }
-
             if (dx !== 0 && dy !== 0) { dx *= 0.707; dy *= 0.707; }
-
             let nextX = player.x + dx * SPEED * dt; let nextY = player.y + dy * SPEED * dt;
             const currentTileKey = `${Math.round(nextX)},${Math.round(nextY)}`;
             if (gridData[currentTileKey] && gridData[currentTileKey].floorType) { player.x = nextX; player.y = nextY; }
 
-            // Factory Logistics Tick
+            // Core Stone slow drip
             if (gridData["0,0"]) {
                 gridData["0,0"].timer += dt;
-                if (gridData["0,0"].timer > 1.5) { inventory.wood += 1; gridData["0,0"].timer = 0; spawnText(0, 0, '+1 Wood', '#DEB887'); }
+                if (gridData["0,0"].timer > 2.5) { inventory.wood += 1; gridData["0,0"].timer = 0; spawnText(0, 0, '+1 Wd', '#DEB887'); }
             }
             
             for (const key in gridData) {
@@ -259,51 +244,128 @@
                 if (!b.machineType) continue;
                 
                 const mDef = BUILDINGS[b.machineType];
-                const [gx, gy] = key.split(',').map(Number);
-                
-                // Power Check Check
-                if (mDef.pCost > 0 && powerUse > powerGen) {
-                    b.status = 'no_power'; continue;
-                }
+                if (mDef.pCost > 0 && powerUse > powerGen) { b.status = 'no_power'; continue; }
 
                 b.timer += dt;
                 
-                if (b.machineType === 'net' && b.timer > 2.0) { 
-                    inventory.scrap += 1; b.timer = 0; b.status = 'ok';
-                    spawnText(gx, gy, '+1 Scrap', '#909090');
+                if (b.machineType === 'net' && b.timer > 2.0 && b.local.scrap < 3) { 
+                    b.local.scrap += 1; b.timer = 0; b.status = 'ok';
                 }
                 
-                if (b.machineType === 'furnace' && b.timer > 2.5) { 
-                    if (inventory.scrap >= 2) {
-                        inventory.scrap -= 2; inventory.plates += 1; 
-                        b.timer = 0; b.status = 'ok';
-                        spawnText(gx, gy, '+1 Plate', '#4F6F6F');
-                    } else {
-                        b.status = 'no_input'; // Stalled!
-                    }
+                if (b.machineType === 'furnace') {
+                    if (b.local.scrap >= 2 && b.local.plates < 3) {
+                        if (b.timer > 2.5) {
+                            b.local.scrap -= 2; b.local.plates += 1; b.timer = 0; b.status = 'ok';
+                        }
+                    } else { b.status = b.local.scrap < 2 ? 'no_input' : 'ok'; }
                 }
 
-                if (b.machineType === 'extractor' && b.timer > 5.0) { 
-                    if (inventory.plates >= 4) {
-                        inventory.plates -= 4; inventory.tokens += 1; 
-                        b.timer = 0; b.status = 'ok';
-                        spawnText(gx, gy, 'TOKEN GENERATED', '#FF69B4');
-                    } else {
-                        b.status = 'no_input'; // Stalled!
-                    }
+                if (b.machineType === 'extractor') { 
+                    if (b.local.plates >= 4) {
+                        if (b.timer > 5.0) {
+                            b.local.plates -= 4; inventory.tokens += 1; b.timer = 0; b.status = 'ok';
+                            spawnText(key.split(',')[0], key.split(',')[1], 'TOKEN!', '#FF69B4');
+                        }
+                    } else { b.status = 'no_input'; }
+                }
+
+                // NEW: Arbor Logic
+                if (b.machineType === 'arbor' && b.timer > 3.0 && b.local.wood < 3) {
+                    b.local.wood += 1; b.timer = 0; b.status = 'ok';
                 }
             }
 
-            // Floating Text Update
+            // Goboblin Logic
+            goboblins.forEach(gob => {
+                if (gob.state === 'idle') {
+                    let jobFound = false;
+                    
+                    // 1. Prioritize refilling inputs
+                    for (let key in gridData) {
+                        let m = gridData[key];
+                        if (m.machineType === 'furnace' && m.local.scrap < 2) {
+                            let sourceKey = Object.keys(gridData).find(k => gridData[k].machineType === 'net' && gridData[k].local.scrap > 0) || (inventory.scrap > 0 ? "0,0" : null);
+                            if (sourceKey) {
+                                gob.state = 'fetching'; gob.item = 'scrap'; gob.destKey = key;
+                                let [sx, sy] = sourceKey.split(',').map(Number);
+                                gob.targetX = sx; gob.targetY = sy; jobFound = true; break;
+                            }
+                        }
+                        if (!jobFound && m.machineType === 'extractor' && m.local.plates < 4) {
+                            let sourceKey = Object.keys(gridData).find(k => gridData[k].machineType === 'furnace' && gridData[k].local.plates > 0) || (inventory.plates > 0 ? "0,0" : null);
+                            if (sourceKey) {
+                                gob.state = 'fetching'; gob.item = 'plates'; gob.destKey = key;
+                                let [sx, sy] = sourceKey.split(',').map(Number);
+                                gob.targetX = sx; gob.targetY = sy; jobFound = true; break;
+                            }
+                        }
+                    }
+
+                    // 2. Haul outputs back to Core (Added Arbor Wood here)
+                    if (!jobFound) {
+                        for (let key in gridData) {
+                            let m = gridData[key];
+                            if (m.machineType === 'net' && m.local.scrap > 0) {
+                                gob.state = 'hauling'; gob.item = 'scrap'; gob.destKey = "0,0";
+                                let [sx, sy] = key.split(',').map(Number);
+                                gob.targetX = sx; gob.targetY = sy; jobFound = true; break;
+                            }
+                            if (m.machineType === 'furnace' && m.local.plates > 0) {
+                                gob.state = 'hauling'; gob.item = 'plates'; gob.destKey = "0,0";
+                                let [sx, sy] = key.split(',').map(Number);
+                                gob.targetX = sx; gob.targetY = sy; jobFound = true; break;
+                            }
+                            if (m.machineType === 'arbor' && m.local.wood > 0) { // NEW
+                                gob.state = 'hauling'; gob.item = 'wood'; gob.destKey = "0,0";
+                                let [sx, sy] = key.split(',').map(Number);
+                                gob.targetX = sx; gob.targetY = sy; jobFound = true; break;
+                            }
+                        }
+                    }
+
+                    if (!jobFound && Math.random() < 0.02) {
+                        let keys = Object.keys(gridData);
+                        let randKey = keys[Math.floor(Math.random() * keys.length)];
+                        let [sx, sy] = randKey.split(',').map(Number);
+                        gob.targetX = sx; gob.targetY = sy;
+                    }
+                } 
+                else {
+                    let gdx = gob.targetX - gob.x; let gdy = gob.targetY - gob.y;
+                    let dist = Math.sqrt(gdx*gdx + gdy*gdy);
+                    let gobSpeed = 5; 
+                    
+                    if (dist > 0.1) {
+                        gob.x += (gdx / dist) * gobSpeed * dt; gob.y += (gdy / dist) * gobSpeed * dt;
+                    } else {
+                        let currentKey = `${Math.round(gob.targetX)},${Math.round(gob.targetY)}`;
+                        
+                        if (gob.state === 'fetching' || gob.state === 'hauling') {
+                            let success = false;
+                            if (currentKey === "0,0" && inventory[gob.item] > 0) { inventory[gob.item]--; success = true; }
+                            else if (gridData[currentKey] && gridData[currentKey].local && gridData[currentKey].local[gob.item] > 0) { gridData[currentKey].local[gob.item]--; success = true; }
+                            
+                            if (success) {
+                                gob.state = 'delivering';
+                                let [dx, dy] = gob.destKey.split(',').map(Number);
+                                gob.targetX = dx; gob.targetY = dy;
+                            } else { gob.state = 'idle'; gob.item = null; } 
+                        } 
+                        else if (gob.state === 'delivering') {
+                            if (currentKey === "0,0") { inventory[gob.item]++; } 
+                            else if (gridData[currentKey] && gridData[currentKey].local) { gridData[currentKey].local[gob.item]++; } 
+                            gob.state = 'idle'; gob.item = null;
+                        }
+                    }
+                }
+            });
+
             for (let i = floatingTexts.length - 1; i >= 0; i--) {
-                floatingTexts[i].life -= dt;
-                floatingTexts[i].y -= 20 * dt; // Float up
+                floatingTexts[i].life -= dt; floatingTexts[i].y -= 20 * dt;
                 if (floatingTexts[i].life <= 0) floatingTexts.splice(i, 1);
             }
+            debrisParticles.forEach(p => { p.z += p.speed * dt; if (p.z > 100) Object.assign(p, spawnDebris()); });
 
-            debrisParticles.forEach(p => { p.z += p.speed * dt; if (p.z > 100) { Object.assign(p, spawnDebris()); } });
-
-            // Update UI
             document.getElementById('res-wood').innerText = `Wood: ${inventory.wood}`;
             document.getElementById('res-scrap').innerText = `Raw Scrap: ${inventory.scrap}`;
             document.getElementById('res-plates').innerText = `Iron Plates: ${inventory.plates}`;
@@ -313,23 +375,21 @@
             const bDef = BUILDINGS[selectedBuilding];
             let reqStr = [];
             if(bDef.costs) for(let res in bDef.costs) reqStr.push(`${bDef.costs[res]} ${res}`);
-            document.getElementById('ui-selected').innerText = `Selected: ${bDef.name} (${reqStr.join(', ')})`;
-
+            document.getElementById('ui-selected').innerText = `Blueprint: ${bDef.name} (${reqStr.join(', ')})`;
             updateTutorial();
         }
 
-        function drawBlock(cx, cy, height, topC, leftC, rightC) {
+        function drawBlock(cx, cy, height, topC, leftC, rightC, scale = 1) {
+            let tw = (TILE_W/2) * scale; let th = (TILE_H/2) * scale;
             ctx.fillStyle = topC; ctx.beginPath();
-            ctx.moveTo(cx, cy - height - TILE_H/2); ctx.lineTo(cx + TILE_W/2, cy - height);
-            ctx.lineTo(cx, cy - height + TILE_H/2); ctx.lineTo(cx - TILE_W/2, cy - height); ctx.fill();
-            
+            ctx.moveTo(cx, cy - height - th); ctx.lineTo(cx + tw, cy - height);
+            ctx.lineTo(cx, cy - height + th); ctx.lineTo(cx - tw, cy - height); ctx.fill();
             ctx.fillStyle = leftC; ctx.beginPath();
-            ctx.moveTo(cx - TILE_W/2, cy - height); ctx.lineTo(cx, cy - height + TILE_H/2);
-            ctx.lineTo(cx, cy + TILE_H/2); ctx.lineTo(cx - TILE_W/2, cy); ctx.fill();
-            
+            ctx.moveTo(cx - tw, cy - height); ctx.lineTo(cx, cy - height + th);
+            ctx.lineTo(cx, cy + th); ctx.lineTo(cx - tw, cy); ctx.fill();
             ctx.fillStyle = rightC; ctx.beginPath();
-            ctx.moveTo(cx, cy - height + TILE_H/2); ctx.lineTo(cx + TILE_W/2, cy - height);
-            ctx.lineTo(cx + TILE_W/2, cy); ctx.lineTo(cx, cy + TILE_H/2); ctx.fill();
+            ctx.moveTo(cx, cy - height + th); ctx.lineTo(cx + tw, cy - height);
+            ctx.lineTo(cx + tw, cy); ctx.lineTo(cx, cy + th); ctx.fill();
         }
 
         function draw(dt) {
@@ -339,15 +399,12 @@
             debrisParticles.forEach(p => {
                 if (p.z < 0) {
                     const scale = 500 / (500 - p.z); 
-                    const sx = canvas.width/2 + (p.x * scale);
-                    const sy = canvas.height/2 + (p.y * scale);
-                    const sSize = p.size * scale;
-                    ctx.fillRect(sx, sy, sSize, sSize);
+                    const sx = canvas.width/2 + (p.x * scale); const sy = canvas.height/2 + (p.y * scale);
+                    ctx.fillRect(sx, sy, p.size * scale, p.size * scale);
                 }
             });
 
-            ctx.save();
-            ctx.translate(canvas.width / 2, canvas.height / 2);
+            ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2);
             
             const renderList = [];
             for (const key in gridData) {
@@ -356,11 +413,16 @@
                     renderList.push({ gx, gy, type: 'floor', def: BUILDINGS[gridData[key].floorType], depth: gx + gy });
                 }
                 if (gridData[key].machineType) {
-                    renderList.push({ gx, gy, type: 'machine', def: BUILDINGS[gridData[key].machineType], status: gridData[key].status, depth: gx + gy + 0.1 });
+                    renderList.push({ gx, gy, type: 'machine', mData: gridData[key], def: BUILDINGS[gridData[key].machineType], status: gridData[key].status, depth: gx + gy + 0.1 });
                 }
             }
 
             renderList.push({ gx: player.x, gy: player.y, type: 'player', def: player, depth: player.x + player.y + 0.05 });
+            
+            goboblins.forEach(gob => {
+                renderList.push({ gx: gob.x, gy: gob.y, type: 'goboblin', gob: gob, depth: gob.x + gob.y + 0.06 });
+            });
+
             renderList.sort((a, b) => a.depth - b.depth);
 
             renderList.forEach(obj => {
@@ -372,21 +434,30 @@
                 else if (obj.type === 'machine') {
                     drawBlock(sx, sy - 8, obj.def.height, obj.def.top, obj.def.left, obj.def.right);
                     
-                    // Draw Status Indicators
+                    if (obj.mData.local) {
+                        let yOffset = sy - 8 - obj.def.height;
+                        if (obj.mData.local.scrap > 0) { ctx.fillStyle = '#909090'; ctx.fillRect(sx - 10, yOffset - 5, 6, 6); }
+                        if (obj.mData.local.plates > 0) { ctx.fillStyle = '#4F6F6F'; ctx.fillRect(sx + 4, yOffset - 5, 6, 6); }
+                        if (obj.mData.local.wood > 0) { ctx.fillStyle = '#DEB887'; ctx.fillRect(sx - 3, yOffset - 12, 6, 6); } // NEW: Arbor Wood Indicator
+                    }
+
                     if (obj.status === 'no_power') {
-                        ctx.fillStyle = '#ff0000'; ctx.beginPath(); ctx.arc(sx, sy - 8 - obj.def.height - 10, 6, 0, Math.PI*2); ctx.fill();
-                        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+                        ctx.fillStyle = '#ff0000'; ctx.beginPath(); ctx.arc(sx, sy - 8 - obj.def.height - 15, 5, 0, Math.PI*2); ctx.fill();
                     } else if (obj.status === 'no_input') {
-                        ctx.fillStyle = '#FFA500'; ctx.beginPath(); ctx.arc(sx, sy - 8 - obj.def.height - 10, 6, 0, Math.PI*2); ctx.fill();
-                        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+                        ctx.fillStyle = '#FFA500'; ctx.beginPath(); ctx.arc(sx, sy - 8 - obj.def.height - 15, 5, 0, Math.PI*2); ctx.fill();
                     }
                 } 
+                else if (obj.type === 'goboblin') {
+                    drawBlock(sx, sy - 8, 8, obj.gob.color, '#B8860B', '#DAA520', 0.4);
+                    if (obj.gob.item && obj.gob.state === 'delivering') {
+                        ctx.fillStyle = resColors[obj.gob.item] || '#fff';
+                        ctx.fillRect(sx - 4, sy - 24, 8, 8);
+                    }
+                }
             });
 
-            // Blueprint Ghost
             const pDist = Math.abs(mouseGridX - Math.round(player.x)) + Math.abs(mouseGridY - Math.round(player.y));
             const bDef = BUILDINGS[selectedBuilding];
-            
             let isValid = false;
             if (pDist <= 4 && canAfford(bDef.costs)) {
                 const key = `${mouseGridX},${mouseGridY}`;
@@ -398,21 +469,17 @@
                     isValid = gridData[key] && gridData[key].floorType && !gridData[key].machineType;
                 }
             }
-
             if (isValid) {
-                const sx = (mouseGridX - mouseGridY) * (TILE_W / 2);
-                const sy = (mouseGridX + mouseGridY) * (TILE_H / 2);
+                const sx = (mouseGridX - mouseGridY) * (TILE_W / 2); const sy = (mouseGridX + mouseGridY) * (TILE_H / 2);
                 const zOff = bDef.isFloor ? 0 : 8;
                 ctx.globalAlpha = 0.5; drawBlock(sx, sy - zOff, bDef.height, '#00FF00', '#00AA00', '#005500'); ctx.globalAlpha = 1.0;
             }
             ctx.restore();
 
-            // Draw Floating Text (Screen Space)
-            ctx.font = "bold 14px monospace";
-            ctx.textAlign = "center";
+            ctx.font = "bold 14px monospace"; ctx.textAlign = "center";
             floatingTexts.forEach(t => {
                 ctx.globalAlpha = t.life / t.maxLife;
-                ctx.fillStyle = '#000'; ctx.fillText(t.text, t.x + 1, t.y + 1); // Shadow
+                ctx.fillStyle = '#000'; ctx.fillText(t.text, t.x + 1, t.y + 1); 
                 ctx.fillStyle = t.color; ctx.fillText(t.text, t.x, t.y);
             });
             ctx.globalAlpha = 1.0;
