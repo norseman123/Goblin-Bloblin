@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Goblin Factory - 2.5D Isometric</title>
+    <title>Goblin Factory - Production Chains</title>
     <style>
         body { 
             margin: 0; background-color: #0b1320; display: flex; 
@@ -11,185 +11,182 @@
             height: 100vh; color: white; font-family: monospace; 
             overflow: hidden; user-select: none;
         }
-        #game-container { position: relative; }
+        #game-container { position: relative; width: 1000px; height: 700px; }
         canvas { 
             background-color: #2b4c65; 
             border: 4px solid #444; 
             box-shadow: 0px 0px 40px rgba(0,0,0,0.8);
-            display: block;
+            display: block; width: 100%; height: 100%;
         }
-        #ui-layer {
-            position: absolute; top: 10px; left: 10px;
-            pointer-events: none; background: rgba(0, 0, 0, 0.85);
-            padding: 15px; border-radius: 5px; border: 1px solid #777;
-        }
-        #game-over {
-            position: absolute; top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(200, 0, 0, 0.9); padding: 40px;
-            border: 4px solid white; text-align: center;
-            display: none; font-size: 24px; font-weight: bold; z-index: 10;
-        }
-        .ui-text { margin: 5px 0; font-size: 16px; font-weight: bold; }
-        .controls { color: #aaa; font-size: 12px; margin-top: 10px; }
         
-        /* Danger color classes for JS to toggle */
-        .safe { color: #32CD32; }
-        .warning { color: #FFA500; }
-        .danger { color: #FF4500; }
+        /* UI Styling */
+        .panel {
+            position: absolute; background: rgba(0, 0, 0, 0.85);
+            padding: 15px; border-radius: 5px; border: 1px solid #777;
+            pointer-events: none;
+        }
+        #ui-left { top: 10px; left: 10px; }
+        #ui-right { top: 10px; right: 10px; width: 220px; }
+        #ui-bottom { bottom: 10px; left: 50%; transform: translateX(-50%); text-align: center; }
+
+        .res { font-size: 16px; font-weight: bold; margin: 4px 0; }
+        .req { color: #aaa; font-size: 12px; margin-left: 10px; }
+        .obj-title { color: #FFD700; font-weight: bold; font-size: 18px; margin-bottom: 5px; border-bottom: 1px solid #555; padding-bottom: 5px; }
+        .obj-task { color: #ddd; font-size: 14px; margin: 5px 0; }
+        .obj-done { text-decoration: line-through; color: #555; }
+        
+        kbd { background: #333; border: 1px solid #666; border-radius: 3px; padding: 2px 5px; font-size: 14px; color: white; }
     </style>
 </head>
 <body>
 
     <div id="game-container">
-        <div id="ui-layer">
-            <div class="ui-text" id="ui-scrap" style="color: #FFD700;">Scrap: 50</div>
-            <div class="ui-text" id="ui-power" style="color: #00FFFF;">Power: 0 / 0</div>
+        <div id="ui-left" class="panel">
+            <div class="res" id="res-wood" style="color: #DEB887;">Wood: 30</div>
+            <div class="res" id="res-scrap" style="color: #909090;">Raw Scrap: 0</div>
+            <div class="res" id="res-plates" style="color: #4F6F6F;">Iron Plates: 0</div>
+            <div class="res" id="res-power" style="color: #00FFFF;">Power: 0 / 0</div>
             <hr style="border-color: #444;">
-            <div class="ui-text safe" id="ui-pitch">Pitch (Y): 0°</div>
-            <div class="ui-text safe" id="ui-roll">Roll (X): 0°</div>
-            <hr style="border-color: #444;">
-            <div class="ui-text" id="ui-selected" style="color: #fff;">Selected: Pearl Wood Floor</div>
-            <div class="controls">
-                1: Wood Floor | 2: Scrap Floor | 3: Steel Floor<br>
-                4: Auto-Miner | 5: Furnace
-            </div>
-        </div>
-        
-        <div id="game-over">
-            PLATFORM CAPSIZED!<br><br>
-            <span style="font-size: 16px;">Refresh to fall again.</span>
+            <div class="res" id="res-tokens" style="color: #FF69B4; font-size: 18px;">Tokens: 0</div>
         </div>
 
-        <canvas id="gameCanvas" width="900" height="700"></canvas>
+        <div id="ui-right" class="panel">
+            <div class="obj-title">Current Objective</div>
+            <div id="objective-list"></div>
+        </div>
+
+        <div id="ui-bottom" class="panel">
+            <div class="res" id="ui-selected" style="color: #fff; margin-bottom: 10px;">Selected: Pearl Wood Floor</div>
+            <kbd>1</kbd> Floor (2 Wd) &nbsp; 
+            <kbd>2</kbd> Wind Net (10 Wd) &nbsp; 
+            <kbd>3</kbd> Turbine (10 Wd, 5 Scr) &nbsp; 
+            <kbd>4</kbd> Furnace (15 Scr) &nbsp; 
+            <kbd>5</kbd> Extractor (20 Plt)
+        </div>
+
+        <canvas id="gameCanvas" width="1000" height="700"></canvas>
     </div>
 
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
 
-        // --- Isometric Engine Settings ---
-        const TILE_W = 64;  // Width of the isometric diamond
-        const TILE_H = 32;  // Height of the isometric diamond
-        const SPEED = 4;    // Goblin movement speed
-
-        const GRAVITY_FACTOR = 0.8;
-        const MAX_ANGLE = 45; // Max degrees before flipping
+        const TILE_W = 64;  
+        const TILE_H = 32;  
+        const SPEED = 4;    
 
         let lastTime = 0;
         const keys = {};
-        let isGameOver = false;
 
-        // Physics State (Dual Axis)
-        let pitch = 0; // Tilt forward/backward
-        let roll = 0;  // Tilt left/right
-        let pitchVel = 0;
-        let rollVel = 0;
+        // --- Economy State ---
+        const inventory = { wood: 40, scrap: 0, plates: 0, tokens: 0 };
+        let powerGen = 0, powerUse = 0;
+        const gridData = {}; 
 
-        // --- Economy & Map ---
-        let scrap = 70;
-        let powerGen = 0;
-        let powerUse = 0;
-        const gridData = {}; // Key: "x,y"
+        // --- Visual Feedback ---
+        const floatingTexts = []; // Array of {x, y, text, color, life, maxLife}
 
-        let mouseGridX = 0;
-        let mouseGridY = 0;
+        let mouseGridX = 0, mouseGridY = 0;
         let selectedBuilding = 'floor_wood';
+        let tutorialStep = 0;
 
-        // --- Entities ---
-        // Player moves in grid coordinates (floats) for smooth 2.5D movement
-        const player = { x: 0, y: 0, colorTop: '#32CD32', colorLeft: '#228B22', colorRight: '#006400', mass: 15 };
-
-        // Debris rushing up from below
+        const player = { x: 0, y: 0, colorTop: '#32CD32', colorLeft: '#228B22', colorRight: '#006400' };
         const debrisParticles = Array.from({length: 40}, () => spawnDebris());
 
         function spawnDebris() {
             return {
-                x: (Math.random() - 0.5) * canvas.width * 2,
-                y: (Math.random() - 0.5) * canvas.height * 2,
-                z: -500 - Math.random() * 500, // Starts deep below
-                speed: 300 + Math.random() * 400,
-                size: 10 + Math.random() * 30
+                x: (Math.random() - 0.5) * canvas.width * 2, y: (Math.random() - 0.5) * canvas.height * 2,
+                z: -500 - Math.random() * 500, speed: 300 + Math.random() * 400, size: 10 + Math.random() * 30
             };
         }
 
-        // --- Building Database (Now with 3D colors and Z-Heights) ---
+        // --- Building Database (Now with logistical requirements) ---
         const BUILDINGS = {
-            'core': { name: 'Core Stone', top: '#8A2BE2', left: '#4B0082', right: '#483D8B', mass: 100, isFloor: true, height: 16, cost: 0, pCost: 0, pGen: 0 },
+            'core': { name: 'Core Stone', top: '#8A2BE2', left: '#4B0082', right: '#483D8B', isFloor: true, height: 16 },
             
-            // Floors (height 8)
-            'floor_wood': { name: 'Pearl Wood Floor', top: '#DEB887', left: '#A0522D', right: '#8B4513', mass: 2, isFloor: true, height: 8, cost: 5, pCost: 0, pGen: 0 },
-            'floor_scrap': { name: 'Scrap Iron Floor', top: '#909090', left: '#606060', right: '#404040', mass: 10, isFloor: true, height: 8, cost: 15, pCost: 0, pGen: 0 },
-            'floor_steel': { name: 'Dark Steel Floor', top: '#4F6F6F', left: '#2F4F4F', right: '#1F3F3F', mass: 40, isFloor: true, height: 8, cost: 40, pCost: 0, pGen: 0 },
+            'floor_wood': { name: 'Pearl Wood Floor', top: '#DEB887', left: '#A0522D', right: '#8B4513', isFloor: true, height: 8, 
+                costs: { wood: 2 }, pCost: 0, pGen: 0 },
             
-            // Machines (built on top of floors, height 32)
-            'miner': { name: 'Auto-Miner', top: '#5CA2D4', left: '#4682B4', right: '#27408B', mass: 8, isFloor: false, height: 32, cost: 25, pCost: 1, pGen: 0 },
-            'furnace': { name: 'Furnace', top: '#B22222', left: '#8B0000', right: '#660000', mass: 15, isFloor: false, height: 32, cost: 15, pCost: 0, pGen: 5 }
+            'net': { name: 'Wind Net', top: '#aaa', left: '#777', right: '#555', isFloor: false, height: 24, 
+                costs: { wood: 10 }, pCost: 0, pGen: 0 },
+            
+            'turbine': { name: 'Wind Turbine', top: '#5CA2D4', left: '#4682B4', right: '#27408B', isFloor: false, height: 40, 
+                costs: { wood: 10, scrap: 5 }, pCost: 0, pGen: 3 },
+            
+            'furnace': { name: 'Furnace', top: '#B22222', left: '#8B0000', right: '#660000', isFloor: false, height: 32, 
+                costs: { scrap: 15 }, pCost: 1, pGen: 0 },
+            
+            'extractor': { name: 'Token Extractor', top: '#FFB6C1', left: '#FF69B4', right: '#C71585', isFloor: false, height: 48, 
+                costs: { plates: 20 }, pCost: 2, pGen: 0 }
         };
 
-        gridData["0,0"] = { type: 'core', timer: 0, floorType: 'core' }; // Starting block
+        gridData["0,0"] = { type: 'core', timer: 0, floorType: 'core' }; 
 
         // --- Input Handling ---
         window.addEventListener('keydown', e => {
-            if (isGameOver) return;
             keys[e.code] = true;
             if (e.code === 'Digit1') selectedBuilding = 'floor_wood';
-            if (e.code === 'Digit2') selectedBuilding = 'floor_scrap';
-            if (e.code === 'Digit3') selectedBuilding = 'floor_steel';
-            if (e.code === 'Digit4') selectedBuilding = 'miner';
-            if (e.code === 'Digit5') selectedBuilding = 'furnace';
+            if (e.code === 'Digit2') selectedBuilding = 'net';
+            if (e.code === 'Digit3') selectedBuilding = 'turbine';
+            if (e.code === 'Digit4') selectedBuilding = 'furnace';
+            if (e.code === 'Digit5') selectedBuilding = 'extractor';
             if (e.code === 'Space') attemptBuild();
         });
         window.addEventListener('keyup', e => keys[e.code] = false);
 
-        // Convert mouse screen coordinates to isometric grid coordinates
         canvas.addEventListener('mousemove', (e) => {
-            if (isGameOver) return;
             const rect = canvas.getBoundingClientRect();
             const mouseX = e.clientX - rect.left - (canvas.width / 2);
             const mouseY = e.clientY - rect.top - (canvas.height / 2);
-
-            // Inverse Isometric Math
-            const isoX = mouseX / (TILE_W / 2);
-            const isoY = mouseY / (TILE_H / 2);
-            
-            mouseGridX = Math.round((isoY + isoX) / 2);
-            mouseGridY = Math.round((isoY - isoX) / 2);
+            const isoX = mouseX / (TILE_W / 2); const isoY = mouseY / (TILE_H / 2);
+            mouseGridX = Math.round((isoY + isoX) / 2); mouseGridY = Math.round((isoY - isoX) / 2);
         });
-
         canvas.addEventListener('mousedown', () => attemptBuild());
 
-        // --- Logic Methods ---
+        function canAfford(costs) {
+            if (!costs) return true;
+            for (let res in costs) if (inventory[res] < costs[res]) return false;
+            return true;
+        }
+
+        function payCosts(costs) {
+            if (!costs) return;
+            for (let res in costs) inventory[res] -= costs[res];
+        }
+
+        function spawnText(gx, gy, text, color) {
+            const sx = (gx - gy) * (TILE_W / 2) + canvas.width/2;
+            const sy = (gx + gy) * (TILE_H / 2) + canvas.height/2 - 40;
+            floatingTexts.push({ x: sx, y: sy, text: text, color: color, life: 1.5, maxLife: 1.5 });
+        }
+
         function attemptBuild() {
-            if (isGameOver) return;
             const key = `${mouseGridX},${mouseGridY}`;
             const bDef = BUILDINGS[selectedBuilding];
-
-            // Distance check (Goblin reach)
             const dist = Math.abs(mouseGridX - Math.round(player.x)) + Math.abs(mouseGridY - Math.round(player.y));
-            if (dist > 3) return;
+            
+            if (dist > 4) return; 
 
             if (bDef.isFloor) {
-                // Must not have a floor already, and must touch another floor
                 if (gridData[key] && gridData[key].floorType) return;
-                
                 const touches = gridData[`${mouseGridX-1},${mouseGridY}`] || gridData[`${mouseGridX+1},${mouseGridY}`] || 
                                 gridData[`${mouseGridX},${mouseGridY-1}`] || gridData[`${mouseGridX},${mouseGridY+1}`];
                 if (!touches) return;
 
-                if (scrap >= bDef.cost) {
-                    scrap -= bDef.cost;
+                if (canAfford(bDef.costs)) {
+                    payCosts(bDef.costs);
                     if (!gridData[key]) gridData[key] = { timer: 0 };
                     gridData[key].floorType = selectedBuilding;
                 }
             } else {
-                // Machines need a floor, but cannot overlap another machine
                 if (!gridData[key] || !gridData[key].floorType) return; 
                 if (gridData[key].machineType) return;
 
-                if (scrap >= bDef.cost) {
-                    scrap -= bDef.cost;
+                if (canAfford(bDef.costs)) {
+                    payCosts(bDef.costs);
                     gridData[key].machineType = selectedBuilding;
+                    gridData[key].timer = 0; 
+                    gridData[key].status = 'ok'; // For alerts
                     recalculatePower();
                 }
             }
@@ -199,135 +196,149 @@
             powerGen = 0; powerUse = 0;
             for (const key in gridData) {
                 if (gridData[key].machineType) {
-                    const mDef = BUILDINGS[gridData[key].machineType];
-                    powerGen += mDef.pGen; powerUse += mDef.pCost;
+                    powerGen += BUILDINGS[gridData[key].machineType].pGen; 
+                    powerUse += BUILDINGS[gridData[key].machineType].pCost;
                 }
             }
         }
 
-        function update(dt) {
-            if (isGameOver) return;
+        function updateTutorial() {
+            let html = "";
+            let tasks = [];
 
-            // 1. Smooth Goblin Movement
+            if (tutorialStep === 0) {
+                tasks = [
+                    { done: inventory.wood < 40 || Object.keys(gridData).length > 1, text: "Expand the platform (Press 1)" },
+                    { done: Object.values(gridData).some(g => g.machineType === 'net'), text: "Build a Wind Net (Press 2)" }
+                ];
+                if (tasks.every(t => t.done)) tutorialStep = 1;
+            } else if (tutorialStep === 1) {
+                tasks = [
+                    { done: inventory.scrap >= 5, text: "Wait for 5 Raw Scrap" },
+                    { done: Object.values(gridData).some(g => g.machineType === 'turbine'), text: "Build a Turbine for power (Press 3)" }
+                ];
+                if (tasks.every(t => t.done)) tutorialStep = 2;
+            } else if (tutorialStep === 2) {
+                tasks = [
+                    { done: Object.values(gridData).some(g => g.machineType === 'furnace'), text: "Build a Furnace (Press 4)" },
+                    { done: inventory.plates >= 1, text: "Smelt your first Iron Plate" }
+                ];
+                if (tasks.every(t => t.done)) tutorialStep = 3;
+            } else {
+                tasks = [ { done: inventory.tokens > 0, text: "Build an Extractor and get a Token!" } ];
+            }
+
+            tasks.forEach(t => {
+                html += `<div class="obj-task ${t.done ? 'obj-done' : ''}">- ${t.text}</div>`;
+            });
+            document.getElementById('objective-list').innerHTML = html;
+        }
+
+        function update(dt) {
+            // Player Movement
             let dx = 0, dy = 0;
             if (keys['KeyW'] || keys['ArrowUp']) { dx -= 1; dy -= 1; }
             if (keys['KeyS'] || keys['ArrowDown']) { dx += 1; dy += 1; }
             if (keys['KeyA'] || keys['ArrowLeft']) { dx -= 1; dy += 1; }
             if (keys['KeyD'] || keys['ArrowRight']) { dx += 1; dy -= 1; }
 
-            // Normalize
             if (dx !== 0 && dy !== 0) { dx *= 0.707; dy *= 0.707; }
 
-            let nextX = player.x + dx * SPEED * dt;
-            let nextY = player.y + dy * SPEED * dt;
-
-            // Simple floor boundary check
+            let nextX = player.x + dx * SPEED * dt; let nextY = player.y + dy * SPEED * dt;
             const currentTileKey = `${Math.round(nextX)},${Math.round(nextY)}`;
-            if (gridData[currentTileKey] && gridData[currentTileKey].floorType) {
-                player.x = nextX; player.y = nextY;
-            }
+            if (gridData[currentTileKey] && gridData[currentTileKey].floorType) { player.x = nextX; player.y = nextY; }
 
-            // 2. Dual-Axis Physics
-            let torqueRoll = 0; // X axis imbalance
-            let torquePitch = 0; // Y axis imbalance
-
-            for (const key in gridData) {
-                const [gx, gy] = key.split(',').map(Number);
-                let tileMass = 0;
-                if (gridData[key].floorType) tileMass += BUILDINGS[gridData[key].floorType].mass;
-                if (gridData[key].machineType) tileMass += BUILDINGS[gridData[key].machineType].mass;
-                
-                // Roll is affected by X-Y diagonal, Pitch by X+Y depth
-                torqueRoll += (gx - gy) * tileMass;
-                torquePitch += (gx + gy) * tileMass;
-            }
-            torqueRoll += (player.x - player.y) * player.mass;
-            torquePitch += (player.x + player.y) * player.mass;
-
-            // Accelerate and apply dampening
-            rollVel += (torqueRoll * GRAVITY_FACTOR * dt) / 100;
-            pitchVel += (torquePitch * GRAVITY_FACTOR * dt) / 100;
-            rollVel *= 0.96; pitchVel *= 0.96;
-            roll += rollVel * dt; pitch += pitchVel * dt;
-
-            // Check Capsizing
-            if (Math.abs(roll) > MAX_ANGLE || Math.abs(pitch) > MAX_ANGLE) {
-                isGameOver = true;
-                document.getElementById('game-over').style.display = 'block';
-            }
-
-            // 3. Economy Ticks
+            // Factory Logistics Tick
             if (gridData["0,0"]) {
                 gridData["0,0"].timer += dt;
-                if (gridData["0,0"].timer > 1) { scrap += 1; gridData["0,0"].timer = 0; }
+                if (gridData["0,0"].timer > 1.5) { inventory.wood += 1; gridData["0,0"].timer = 0; spawnText(0, 0, '+1 Wood', '#DEB887'); }
             }
+            
             for (const key in gridData) {
-                if (gridData[key].machineType === 'miner' && powerGen >= powerUse) {
-                    gridData[key].timer += dt;
-                    if (gridData[key].timer > 1.5) { scrap += 1; gridData[key].timer = 0; }
+                const b = gridData[key];
+                if (!b.machineType) continue;
+                
+                const mDef = BUILDINGS[b.machineType];
+                const [gx, gy] = key.split(',').map(Number);
+                
+                // Power Check Check
+                if (mDef.pCost > 0 && powerUse > powerGen) {
+                    b.status = 'no_power'; continue;
+                }
+
+                b.timer += dt;
+                
+                if (b.machineType === 'net' && b.timer > 2.0) { 
+                    inventory.scrap += 1; b.timer = 0; b.status = 'ok';
+                    spawnText(gx, gy, '+1 Scrap', '#909090');
+                }
+                
+                if (b.machineType === 'furnace' && b.timer > 2.5) { 
+                    if (inventory.scrap >= 2) {
+                        inventory.scrap -= 2; inventory.plates += 1; 
+                        b.timer = 0; b.status = 'ok';
+                        spawnText(gx, gy, '+1 Plate', '#4F6F6F');
+                    } else {
+                        b.status = 'no_input'; // Stalled!
+                    }
+                }
+
+                if (b.machineType === 'extractor' && b.timer > 5.0) { 
+                    if (inventory.plates >= 4) {
+                        inventory.plates -= 4; inventory.tokens += 1; 
+                        b.timer = 0; b.status = 'ok';
+                        spawnText(gx, gy, 'TOKEN GENERATED', '#FF69B4');
+                    } else {
+                        b.status = 'no_input'; // Stalled!
+                    }
                 }
             }
 
-            // 4. Update Debris from below
-            debrisParticles.forEach(p => {
-                p.z += p.speed * dt;
-                if (p.z > 100) { Object.assign(p, spawnDebris()); } // Reset below
-            });
+            // Floating Text Update
+            for (let i = floatingTexts.length - 1; i >= 0; i--) {
+                floatingTexts[i].life -= dt;
+                floatingTexts[i].y -= 20 * dt; // Float up
+                if (floatingTexts[i].life <= 0) floatingTexts.splice(i, 1);
+            }
 
-            // 5. Update UI
-            document.getElementById('ui-scrap').innerText = `Scrap: ${Math.floor(scrap)}`;
-            document.getElementById('ui-power').innerText = `Power: ${powerUse} / ${powerGen}`;
+            debrisParticles.forEach(p => { p.z += p.speed * dt; if (p.z > 100) { Object.assign(p, spawnDebris()); } });
+
+            // Update UI
+            document.getElementById('res-wood').innerText = `Wood: ${inventory.wood}`;
+            document.getElementById('res-scrap').innerText = `Raw Scrap: ${inventory.scrap}`;
+            document.getElementById('res-plates').innerText = `Iron Plates: ${inventory.plates}`;
+            document.getElementById('res-tokens').innerText = `Tokens: ${inventory.tokens}`;
+            document.getElementById('res-power').innerText = `Power: ${powerUse} / ${powerGen}`;
             
             const bDef = BUILDINGS[selectedBuilding];
-            document.getElementById('ui-selected').innerText = `Blueprint: ${bDef.name} (Cost: ${bDef.cost})`;
+            let reqStr = [];
+            if(bDef.costs) for(let res in bDef.costs) reqStr.push(`${bDef.costs[res]} ${res}`);
+            document.getElementById('ui-selected').innerText = `Selected: ${bDef.name} (${reqStr.join(', ')})`;
 
-            const pUi = document.getElementById('ui-pitch');
-            pUi.innerText = `Pitch: ${Math.abs(pitch).toFixed(1)}° ${pitch > 0 ? 'Fwd' : (pitch < 0 ? 'Back' : '')}`;
-            pUi.className = `ui-text ${Math.abs(pitch) > 30 ? 'danger' : (Math.abs(pitch) > 15 ? 'warning' : 'safe')}`;
-
-            const rUi = document.getElementById('ui-roll');
-            rUi.innerText = `Roll: ${Math.abs(roll).toFixed(1)}° ${roll > 0 ? 'Right' : (roll < 0 ? 'Left' : '')}`;
-            rUi.className = `ui-text ${Math.abs(roll) > 30 ? 'danger' : (Math.abs(roll) > 15 ? 'warning' : 'safe')}`;
+            updateTutorial();
         }
 
-        // --- Rendering Engine ---
-
-        // Draws a 3D isometric block
         function drawBlock(cx, cy, height, topC, leftC, rightC) {
-            // Top Face
-            ctx.fillStyle = topC;
-            ctx.beginPath();
-            ctx.moveTo(cx, cy - height - TILE_H/2);
-            ctx.lineTo(cx + TILE_W/2, cy - height);
-            ctx.lineTo(cx, cy - height + TILE_H/2);
-            ctx.lineTo(cx - TILE_W/2, cy - height);
-            ctx.fill();
-            // Left Face
-            ctx.fillStyle = leftC;
-            ctx.beginPath();
-            ctx.moveTo(cx - TILE_W/2, cy - height);
-            ctx.lineTo(cx, cy - height + TILE_H/2);
-            ctx.lineTo(cx, cy + TILE_H/2);
-            ctx.lineTo(cx - TILE_W/2, cy);
-            ctx.fill();
-            // Right Face
-            ctx.fillStyle = rightC;
-            ctx.beginPath();
-            ctx.moveTo(cx, cy - height + TILE_H/2);
-            ctx.lineTo(cx + TILE_W/2, cy - height);
-            ctx.lineTo(cx + TILE_W/2, cy);
-            ctx.lineTo(cx, cy + TILE_H/2);
-            ctx.fill();
+            ctx.fillStyle = topC; ctx.beginPath();
+            ctx.moveTo(cx, cy - height - TILE_H/2); ctx.lineTo(cx + TILE_W/2, cy - height);
+            ctx.lineTo(cx, cy - height + TILE_H/2); ctx.lineTo(cx - TILE_W/2, cy - height); ctx.fill();
+            
+            ctx.fillStyle = leftC; ctx.beginPath();
+            ctx.moveTo(cx - TILE_W/2, cy - height); ctx.lineTo(cx, cy - height + TILE_H/2);
+            ctx.lineTo(cx, cy + TILE_H/2); ctx.lineTo(cx - TILE_W/2, cy); ctx.fill();
+            
+            ctx.fillStyle = rightC; ctx.beginPath();
+            ctx.moveTo(cx, cy - height + TILE_H/2); ctx.lineTo(cx + TILE_W/2, cy - height);
+            ctx.lineTo(cx + TILE_W/2, cy); ctx.lineTo(cx, cy + TILE_H/2); ctx.fill();
         }
 
         function draw(dt) {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 1. Draw Debris (Perspective scale trick)
             ctx.fillStyle = 'rgba(200, 220, 255, 0.4)';
             debrisParticles.forEach(p => {
                 if (p.z < 0) {
-                    const scale = 500 / (500 - p.z); // Simple perspective projection
+                    const scale = 500 / (500 - p.z); 
                     const sx = canvas.width/2 + (p.x * scale);
                     const sy = canvas.height/2 + (p.y * scale);
                     const sSize = p.size * scale;
@@ -338,111 +349,82 @@
             ctx.save();
             ctx.translate(canvas.width / 2, canvas.height / 2);
             
-            // Apply camera wobble based on physics
-            ctx.rotate(roll * Math.PI / 180 * 0.3); // Slight visual rotation
-            ctx.translate(0, pitch * 1.5); // Slight visual shifting up/down
-
-            // 2. Compile Render List for Painter's Algorithm
             const renderList = [];
-
             for (const key in gridData) {
                 const [gx, gy] = key.split(',').map(Number);
-                
-                // Add Floor
                 if (gridData[key].floorType) {
-                    renderList.push({
-                        gx: gx, gy: gy, type: 'floor',
-                        def: BUILDINGS[gridData[key].floorType],
-                        depth: gx + gy // Isometric depth sorting
-                    });
+                    renderList.push({ gx, gy, type: 'floor', def: BUILDINGS[gridData[key].floorType], depth: gx + gy });
                 }
-                // Add Machine (renders slightly higher depth so it draws on top of floor)
                 if (gridData[key].machineType) {
-                    renderList.push({
-                        gx: gx, gy: gy, type: 'machine',
-                        def: BUILDINGS[gridData[key].machineType],
-                        hasPower: powerGen >= powerUse,
-                        depth: gx + gy + 0.1 
-                    });
+                    renderList.push({ gx, gy, type: 'machine', def: BUILDINGS[gridData[key].machineType], status: gridData[key].status, depth: gx + gy + 0.1 });
                 }
             }
 
-            // Add Player
-            renderList.push({
-                gx: player.x, gy: player.y, type: 'player',
-                def: player, depth: player.x + player.y + 0.05
-            });
-
-            // Sort Back-to-Front
+            renderList.push({ gx: player.x, gy: player.y, type: 'player', def: player, depth: player.x + player.y + 0.05 });
             renderList.sort((a, b) => a.depth - b.depth);
 
-            // 3. Render Objects
             renderList.forEach(obj => {
-                // Convert Grid to Screen (Isometric Projection)
                 const sx = (obj.gx - obj.gy) * (TILE_W / 2);
                 const sy = (obj.gx + obj.gy) * (TILE_H / 2);
 
-                if (obj.type === 'floor') {
-                    drawBlock(sx, sy, obj.def.height, obj.def.top, obj.def.left, obj.def.right);
-                } 
+                if (obj.type === 'floor') drawBlock(sx, sy, obj.def.height, obj.def.top, obj.def.left, obj.def.right);
+                else if (obj.type === 'player') drawBlock(sx, sy - 8, 16, obj.def.colorTop, obj.def.colorLeft, obj.def.colorRight);
                 else if (obj.type === 'machine') {
-                    // Start drawing machine *above* the floor
-                    const zOffset = 8; 
-                    drawBlock(sx, sy - zOffset, obj.def.height, obj.def.top, obj.def.left, obj.def.right);
+                    drawBlock(sx, sy - 8, obj.def.height, obj.def.top, obj.def.left, obj.def.right);
                     
-                    // Power Warning
-                    if (obj.def.name === 'Auto-Miner' && !obj.hasPower) {
-                        ctx.fillStyle = 'red';
-                        ctx.beginPath(); ctx.arc(sx, sy - zOffset - obj.def.height, 5, 0, Math.PI*2); ctx.fill();
+                    // Draw Status Indicators
+                    if (obj.status === 'no_power') {
+                        ctx.fillStyle = '#ff0000'; ctx.beginPath(); ctx.arc(sx, sy - 8 - obj.def.height - 10, 6, 0, Math.PI*2); ctx.fill();
+                        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+                    } else if (obj.status === 'no_input') {
+                        ctx.fillStyle = '#FFA500'; ctx.beginPath(); ctx.arc(sx, sy - 8 - obj.def.height - 10, 6, 0, Math.PI*2); ctx.fill();
+                        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
                     }
                 } 
-                else if (obj.type === 'player') {
-                    const zOffset = 8;
-                    drawBlock(sx, sy - zOffset, 16, obj.def.colorTop, obj.def.colorLeft, obj.def.colorRight);
-                }
             });
 
-            // 4. Draw Blueprint Ghost (if valid)
-            if (!isGameOver) {
-                const pDist = Math.abs(mouseGridX - Math.round(player.x)) + Math.abs(mouseGridY - Math.round(player.y));
-                const bDef = BUILDINGS[selectedBuilding];
-                
-                let isValid = false;
-                if (pDist <= 3 && scrap >= bDef.cost) {
-                    const key = `${mouseGridX},${mouseGridY}`;
-                    if (bDef.isFloor) {
-                        const touches = gridData[`${mouseGridX-1},${mouseGridY}`] || gridData[`${mouseGridX+1},${mouseGridY}`] || 
-                                        gridData[`${mouseGridX},${mouseGridY-1}`] || gridData[`${mouseGridX},${mouseGridY+1}`];
-                        isValid = touches && (!gridData[key] || !gridData[key].floorType);
-                    } else {
-                        isValid = gridData[key] && gridData[key].floorType && !gridData[key].machineType;
-                    }
-                }
-
-                if (isValid) {
-                    const sx = (mouseGridX - mouseGridY) * (TILE_W / 2);
-                    const sy = (mouseGridX + mouseGridY) * (TILE_H / 2);
-                    const zOff = bDef.isFloor ? 0 : 8;
-                    
-                    ctx.globalAlpha = 0.5;
-                    drawBlock(sx, sy - zOff, bDef.height, '#00FF00', '#00AA00', '#005500');
-                    ctx.globalAlpha = 1.0;
+            // Blueprint Ghost
+            const pDist = Math.abs(mouseGridX - Math.round(player.x)) + Math.abs(mouseGridY - Math.round(player.y));
+            const bDef = BUILDINGS[selectedBuilding];
+            
+            let isValid = false;
+            if (pDist <= 4 && canAfford(bDef.costs)) {
+                const key = `${mouseGridX},${mouseGridY}`;
+                if (bDef.isFloor) {
+                    const touches = gridData[`${mouseGridX-1},${mouseGridY}`] || gridData[`${mouseGridX+1},${mouseGridY}`] || 
+                                    gridData[`${mouseGridX},${mouseGridY-1}`] || gridData[`${mouseGridX},${mouseGridY+1}`];
+                    isValid = touches && (!gridData[key] || !gridData[key].floorType);
+                } else {
+                    isValid = gridData[key] && gridData[key].floorType && !gridData[key].machineType;
                 }
             }
 
+            if (isValid) {
+                const sx = (mouseGridX - mouseGridY) * (TILE_W / 2);
+                const sy = (mouseGridX + mouseGridY) * (TILE_H / 2);
+                const zOff = bDef.isFloor ? 0 : 8;
+                ctx.globalAlpha = 0.5; drawBlock(sx, sy - zOff, bDef.height, '#00FF00', '#00AA00', '#005500'); ctx.globalAlpha = 1.0;
+            }
             ctx.restore();
+
+            // Draw Floating Text (Screen Space)
+            ctx.font = "bold 14px monospace";
+            ctx.textAlign = "center";
+            floatingTexts.forEach(t => {
+                ctx.globalAlpha = t.life / t.maxLife;
+                ctx.fillStyle = '#000'; ctx.fillText(t.text, t.x + 1, t.y + 1); // Shadow
+                ctx.fillStyle = t.color; ctx.fillText(t.text, t.x, t.y);
+            });
+            ctx.globalAlpha = 1.0;
         }
 
         function gameLoop(timestamp) {
             if (!lastTime) lastTime = timestamp;
             const dt = (timestamp - lastTime) / 1000;
             lastTime = timestamp;
-
-            update(dt);
-            draw(dt);
+            update(dt); draw(dt);
             requestAnimationFrame(gameLoop);
         }
-
         requestAnimationFrame(gameLoop);
     </script>
 </body>
